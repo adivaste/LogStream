@@ -1,9 +1,11 @@
 import './App.css'
+import { Header } from './components/layout/Header'
 
 function App() {
     return (
         <div className="App">
-            <h1 className='font-sans text-2xl font-bold'>LogStream</h1>
+            {/* Header */}
+            <Header />            
         </div>
     )
 }
