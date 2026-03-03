@@ -22,14 +22,14 @@ function Header() {
 
     // State
     const isLiveStreamOn: boolean = useUIStore(state => state.isLiveStreamOn);
-    const isTraceFlagModelOpen: boolean = useUIStore(state => state.isTraceFlagModelOpen);
+    const isTraceFlagModalOpen: boolean = useUIStore(state => state.isTraceFlagModalOpen);
     const isShortcutsModalOpen: boolean = useUIStore(state => state.isShortcutsModalOpen);
     const isSettingsModalOpen: boolean = useUIStore(state => state.isSettingsModalOpen);
 
     // Event Handlers
     const handleDarkModeToggle = useUIStore(state => state.toggleTheme);
     const handleLiveStreamToggle = useUIStore(state => state.toggleLiveStream);
-    const handleSetTraceFlag = useUIStore(state => state.toggleTraceFlagModelOpen);
+    const handleSetTraceFlag = useUIStore(state => state.toggleTraceFlagModalOpen);
     const handleViewShortcuts = useUIStore(state => state.toggleShortcutsModal);
     const handleSettings = useUIStore(state => state.toggleSettingsModal);
 
@@ -65,6 +65,7 @@ function Header() {
                     size="sm" 
                     variant="outline" 
                     title='Live Log Stream Toggle'
+                    role='switch'
                     aria-label='Live Log Stream Toggle'
                     aria-checked={isLiveStreamOn}
                     className='border-zinc-200 rounded-md px-4 cursor-pointer' 
@@ -90,7 +91,7 @@ function Header() {
                     variant='outline' 
                     title='Set Trace Flag' 
                     aria-label='Set Trace Flag' 
-                    aria-checked={isTraceFlagModelOpen}
+                    aria-expanded={isTraceFlagModalOpen}
                     className='cursor-pointer'
                     onClick={handleSetTraceFlag}
                 >
@@ -103,7 +104,7 @@ function Header() {
                     variant='outline' 
                     title='View Shortcuts' 
                     aria-label='View Shortcuts' 
-                    aria-checked={isShortcutsModalOpen}
+                    aria-expanded={isShortcutsModalOpen}
                     className='cursor-pointer'
                     onClick={handleViewShortcuts}
                 >
@@ -128,7 +129,7 @@ function Header() {
                     variant='outline' 
                     title='Settings' 
                     aria-label='Settings' 
-                    aria-checked={isSettingsModalOpen}
+                    aria-expanded={isSettingsModalOpen}
                     className='cursor-pointer'
                     onClick={handleSettings}
                 >
