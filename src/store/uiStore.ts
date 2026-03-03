@@ -1,10 +1,10 @@
 import { create } from "zustand";
-import theme from "../types/ui";
+import type { Theme } from "../types/ui";
 
 type UIState = {
 
     // Theme
-    theme: theme;
+    theme: Theme;
     toggleTheme: () => void;
 
     // Live Stream
@@ -20,47 +20,31 @@ type UIState = {
     toggleSettingsModal: () => void;
     
     // Trace Flag Modal
-    isTraceFlagModelOpen: boolean,
-    toggleTraceFlagModelOpen: () => void,
+    isTraceFlagModalOpen: boolean,
+    toggleTraceFlagModalOpen: () => void,
 
 }
 
-export const useUIStore = create<UIState>((set, get) => ({
+export const useUIStore = create<UIState>((set) => ({
 
     // Initial State
     theme: 'light',
     isLiveStreamOn: true,
     isShortcutsModalOpen: false,
     isSettingsModalOpen: false,
-    isTraceFlagModelOpen: false,
+    isTraceFlagModalOpen: false,
 
     // Actions
     toggleTheme: () => {
-        const next: theme = get().theme === 'light' ? 'dark' : 'light';
-        document.documentElement.classList.toggle('dark', next == 'dark');
-        set({ theme: next});
+        set(prev => {
+            const next: Theme = prev.theme === 'light' ? 'dark' : 'light';
+            document.documentElement.classList.toggle('dark', next === 'dark');
+            return { theme: next };
+        });
     },
-    toggleLiveStream: () => {
-        const current: boolean = get().isLiveStreamOn;
-        const next: boolean = !current;
-        console.log(`Toggling Live Stream: ${next ? 'ON' : 'OFF'}`);
-        
-        set({ isLiveStreamOn : next });
-    },
-    toggleShortcutsModal: () => {
-        const current: boolean = get().isShortcutsModalOpen;
-        const next: boolean = !current;
-        set({ isShortcutsModalOpen : next });
-    },
-    toggleSettingsModal: () => {
-        const current: boolean = get().isSettingsModalOpen;
-        const next: boolean = !current;
-        set({ isSettingsModalOpen : next });
-    },
-    toggleTraceFlagModelOpen: () => {
-        const current: boolean = get().isTraceFlagModelOpen;
-        const next: boolean = !current;
-        set({ isTraceFlagModelOpen : next });
-    }
+    toggleLiveStream: () => set(prev => ({isLiveStreamOn: !prev.isLiveStreamOn})),
+    toggleShortcutsModal: () => set(prev => ({ isShortcutsModalOpen: !prev.isShortcutsModalOpen })), 
+    toggleSettingsModal: () => set(prev => ({ isSettingsModalOpen: !prev.isSettingsModalOpen })), 
+    toggleTraceFlagModalOpen: () => set(prev => ({ isTraceFlagModalOpen: !prev.isTraceFlagModalOpen }))
 
-}))
+}));
