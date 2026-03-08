@@ -11,6 +11,7 @@
     /* Fonts */
     --font-sans: 'Geist', sans-serif;
     --font-mono: 'Geist Mono', monospace;
+    --font-serif: 'Plus Jakarta Sans', sans-serif;
 
     /* Background Colors */
     --background: oklch(1 0 0);

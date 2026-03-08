@@ -5,7 +5,6 @@ import { useUIStore } from '@/store/uiStore';
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button';
 
-import Logo from '../../assets/images/Logo.png'
 import { 
     Settings,
     HelpCircle,
@@ -37,16 +36,26 @@ function Header() {
     return (
 
         <header className='
-            flex items-center h-12 px-2
-            border-b border-dashed border-zinc-300 dark:border-zinc-700'
+            flex items-center h-13 px-2
+            border-b border-zinc-300 dark:border-zinc-800'
         >
             
             {/* Header - Left */}
             <div className='header-left flex items-center gap-2'>
 
                 {/* Logo */}
-                <div className='flex items-center px-2 py-1'>
-                    <img src={Logo} alt="LogStream Logo" className="h-7 dark:invert" />
+                <div className='flex items-center px-2 py-1 gap-1'>
+
+                    {/* Icon */}
+                    <div className='rotate-90'>
+                        <svg width="28" height="28" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path fill="#2B7FFF" fillRule="evenodd" d="M22 12c0 5.523-4.477 10-10 10S2 17.523 2 12S6.477 2 12 2s10 4.477 10 10m-5.293.793l-4-4a1 1 0 0 0-1.414 0l-4 4a1 1 0 1 0 1.414 1.414L12 10.914l3.293 3.293a1 1 0 0 0 1.414-1.414" clipRule="evenodd"/></svg>
+                    </div>
+
+                    {/* Text */}
+                    <div className='flex items-center justify-center'>
+                        <span className='text-[22px] font-serif font-semibold -tracking-wide'>Log</span>
+                        <span className='text-[22px] font-serif font-semibold -tracking-wide text-neutral-500'>Stream</span>
+                    </div>
                 </div>
 
                 {/* Organization Badge */}
