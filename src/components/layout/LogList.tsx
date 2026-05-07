@@ -1,6 +1,7 @@
 import { ArrowDown, ArrowUp } from "lucide-react";
 import { useTableUIStore } from "@/store/tableUIStore";
 import { SortBy, SortDirection } from "@/types/ui";
+import { LogFilterBar } from "./LogFilterBar";
 import React from "react";
 
 function LogList() {
@@ -82,12 +83,15 @@ function LogList() {
     return (
 
         <section className="flex-1">
-            <div className="table w-full">
+            <table className="table w-full">
+
+                {/* Filter Bar */}
+                <LogFilterBar />
 
                 {/* Table Header */}
-                <thead className="grid grid-cols-6 border-y border-border py-1 px-8 bg-card sticky top-0 z-10">
+                <thead className="grid grid-cols-6 border-y border-border py-1 px-8 bg-card sticky top-12 z-10">
                     {tableColumns.map((column) => (
-                        <div 
+                        <td
                             key={column}
                             tabIndex={0}
                             data-column={column}
@@ -110,7 +114,7 @@ function LogList() {
                                     <ArrowDown size={16} className="ml-1 text-emerald-500" />
                                 )
                             )}
-                        </div>
+                        </td>
                     ))}
                 </thead>
 
@@ -120,31 +124,31 @@ function LogList() {
 
                     {/* Table Row */}
                     {logs.map((log, index) => (
-                        <div 
+                        <tr 
                             key={index} 
                             className="grid grid-cols-6 gap-4 border-b border-border py-2 px-8"
                         >
                             
-                            <div tabIndex={0} className="
+                            <td tabIndex={0} className="
                                 text-sans text-sm text-primary rounded px-2 py-px
                                 focus-visible:ring-emerald-600 focus-visible:outline-none
                                 focus-visible:ring-1 focus-visible:ring-inset" 
                             >
                                 {log.operation}
-                            </div>
-                            <div className="text-sans text-sm text-primary">{log.user}</div>
-                            <div className="text-sans text-sm text-primary">{log.app}</div>
-                            <div className="text-sans text-sm text-primary/70 dark:text-primary/50 font-mono">{log.size}</div>
-                            <div className="text-sans text-sm text-muted-foreground font-mono bg-muted w-fit px-2 py-px rounded">
+                            </td>
+                            <td className="text-sans text-sm text-primary">{log.user}</td>
+                            <td className="text-sans text-sm text-primary">{log.app}</td>
+                            <td className="text-sans text-sm text-primary/70 dark:text-primary/50 font-mono">{log.size}</td>
+                            <td className="text-sans text-sm text-muted-foreground font-mono bg-muted w-fit px-2 py-px rounded">
                                 {log.duration}
-                            </div>
-                            <div className="text-sans text-sm text-muted-foreground font-mono">{log.timestamp}</div>
-                        </div>
+                            </td>
+                            <td className="text-sans text-sm text-muted-foreground font-mono">{log.timestamp}</td>
+                        </tr>
                     ))}
 
                 </tbody>
 
-            </div>
+            </table>
         </section>
 
     );
