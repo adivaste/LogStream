@@ -61,17 +61,17 @@ function Insights() {
                 {/* Insights Row 1 */}
                 <div className="grid grid-cols-4 gap-4">
                     <div>
-                        <span className="text-primary/60 font-sans">Total Logs</span>
+                        <span className="text-primary/60 font-sans text-sm">Total Logs</span>
                         <h1 className="text-3xl font-bold font-mono">1,245</h1>
                     </div>
                     
                     <div>
-                        <span className="text-primary/60 font-sans">Errors</span>
+                        <span className="text-primary/60 font-sans text-sm">Errors</span>
                         <h1 className="text-3xl font-bold font-mono text-destructive">643</h1>
                     </div>
                     
                     <div>
-                        <span className="text-primary/60 font-sans">Avg. Duration</span>
+                        <span className="text-primary/60 font-sans text-sm">Avg. Duration</span>
                         <h1 className="text-3xl font-bold font-mono">
                             1,202
                             <span className="text-primary/40 px-1 m-0">ms</span> 
@@ -79,7 +79,7 @@ function Insights() {
                     </div>
 
                     <div>
-                        <span className="text-primary/60 font-sans">Avg. Size</span>
+                        <span className="text-primary/60 font-sans text-sm">Avg. Size</span>
                         <h1 className="text-3xl font-bold font-mono">
                             342
                             <span className="text-primary/40 px-1 m-0">kb</span> 
@@ -90,22 +90,22 @@ function Insights() {
                 {/* Insights Row 2 */}
                 <div className="grid grid-cols-4 gap-4">
                     <div>
-                        <span className="text-primary/60 font-sans">Slow Reqs</span>
+                        <span className="text-primary/60 font-sans text-sm">Slow Reqs</span>
                         <h1 className="text-3xl font-bold font-mono">342</h1>
                     </div>
                     
                     <div>
-                        <span className="text-primary/60 font-sans">Largest Log</span>
+                        <span className="text-primary/60 font-sans text-sm">Largest Log</span>
                         <h1 className="text-3xl font-bold font-mono">643</h1>
                     </div>
                     
                     <div>
-                        <span className="text-primary/60 font-sans">Active Users</span>
+                        <span className="text-primary/60 font-sans text-sm">Active Users</span>
                         <h1 className="text-3xl font-bold font-mono">107</h1>
                     </div>
 
                     <div>
-                        <span className="text-primary/60 font-sans">Req/Sec</span>
+                        <span className="text-primary/60 font-sans text-sm">Req/Sec</span>
                         <h1 className="text-3xl font-bold font-mono">3</h1>
                     </div>
                 </div>
@@ -113,13 +113,24 @@ function Insights() {
             </section>
             <section className="w-1/2 select-none focus-visible:outline-none">
                 <div className="p-4">
-                    <h2 className="mb-4 font-semibold text-sans text-lg">Logs Per Minute</h2>
+                    <h2 className="mb-4 font-semibold font-sans text-lg">Logs Per Minute</h2>
                     <div className="h-42 w-full">
                         <ChartContainer config={chartConfig}>
                             <BarChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 0 }} className="text-sm">
-                                <CartesianGrid strokeDasharray="3 6" vertical={false} />
-                                <XAxis dataKey="minute" tickLine={false} axisLine={false} />
-                                <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={32} />
+                                <CartesianGrid stroke="var(--border)" strokeDasharray="3 6" vertical={false} />
+                                <XAxis
+                                    dataKey="minute"
+                                    tickLine={false}
+                                    axisLine={false}
+                                    tick={{ fill: 'var(--muted-foreground)', fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                                />
+                                <YAxis
+                                    allowDecimals={false}
+                                    tickLine={false}
+                                    axisLine={false}
+                                    width={32}
+                                    tick={{ fill: 'var(--muted-foreground)', fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                                />
                                 <ChartTooltip content={<ChartTooltipContent />} cursor={false} />
                                 <Bar dataKey="logs" fill="var(--color-logs)" radius={[0, 0, 0, 0]} />
                             </BarChart>

@@ -1,5 +1,4 @@
 /* src/index.css */
-@import url('https://fonts.googleapis.com/css2?family=Geist+Mono:wght@100..900&family=Geist:wght@100..900&family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=Plus+Jakarta+Sans:ital,wght@0,200..800;1,200..800&display=swap');
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
@@ -9,9 +8,9 @@
 :root {
 
     /* Fonts */
-    --font-sans: 'Geist', sans-serif;
-    --font-mono: 'Geist Mono', monospace;
-    --font-serif: 'Plus Jakarta Sans', sans-serif;
+    --font-sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
+    --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    --font-serif: 'Geist', ui-sans-serif, system-ui, sans-serif;
 
     /* Background Colors */
     --background: oklch(1 0 0);
@@ -59,7 +58,7 @@
     --destructive: oklch(0.577 0.245 27.325);
     --input: oklch(0.92 0.004 286.32);
     --ring: oklch(0.705 0.015 286.067);
-    --chart-1: oklch(0.646 0.222 41.116);
+    --chart-1: oklch(70.192% 0.15767 160.464);
     --chart-2: oklch(0.6 0.118 184.704);
     --chart-3: oklch(0.398 0.07 227.392);
     --chart-4: oklch(0.828 0.189 84.429);
@@ -75,6 +74,9 @@
 }
 
 @theme inline {
+    --font-sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
+    --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    --font-serif: 'Geist', ui-sans-serif, system-ui, sans-serif;
     --radius-sm: calc(var(--radius) - 4px);
     --radius-md: calc(var(--radius) - 2px);
     --radius-lg: var(--radius);
@@ -134,7 +136,7 @@
     --border: oklch(1 0 0 / 10%);
     --input: oklch(1 0 0 / 15%);
     --ring: oklch(0.552 0.016 285.938);
-    --chart-1: oklch(0.488 0.243 264.376);
+    --chart-1: oklch(70.192% 0.15767 160.464);
     --chart-2: oklch(0.696 0.17 162.48);
     --chart-3: oklch(0.769 0.188 70.08);
     --chart-4: oklch(0.627 0.265 303.9);
@@ -153,7 +155,47 @@
   * {
     @apply border-border outline-ring/50;
     }
+  html {
+    font-family: var(--font-sans);
+    }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground font-sans antialiased;
+    }
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+    }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: oklch(0.38 0.01 286) transparent;
+    }
+
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+    }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+    }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: oklch(0.38 0.01 286);
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background-clip: content-box;
+    }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: oklch(0.3 0.01 286);
+    }
+
+  *::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
     }
 }

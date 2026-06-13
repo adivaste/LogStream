@@ -10,7 +10,17 @@ export default defineConfig({
         outDir: 'dist',
         rollupOptions: {
             input: {
-                main: 'index.html'
+                main: 'index.html',
+                background: path.resolve(__dirname, 'src/background/index.ts')
+            },
+            output: {
+                entryFileNames: (chunkInfo) => (
+                    chunkInfo.name === 'background'
+                        ? 'background.js'
+                        : 'assets/[name]-[hash].js'
+                ),
+                chunkFileNames: 'assets/[name]-[hash].js',
+                assetFileNames: 'assets/[name]-[hash][extname]'
             }
         }
     },
