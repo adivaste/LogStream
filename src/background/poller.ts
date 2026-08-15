@@ -1,9 +1,11 @@
 import { LIVE_LOG_POLL_INTERVAL_MS } from "@/lib/livePollingConfig";
 import type { SalesforceLogEntry, SalesforceOrgId } from "@/types/salesforce";
-import type { LivePollingState, WorkerEvent } from "@/types/workerMessages";
+import type { LivePollingState } from "@/types/workerMessages";
+import { broadcastWorkerEvent } from "./broadcast";
 import { logRepository } from "./db/logRepository";
 import { syncStateRepository } from "./db/syncStateRepository";
 import { apexLogService } from "./salesforce/apexLogService";
+import { SalesforceSessionExpiredError } from "./salesforce/salesforceClient";
 import { sessionStore } from "./session/sessionStore";
 
 const LIVE_POLL_ALARM_NAME = 'logstream-live-poll';
@@ -16,27 +18,14 @@ type ChromeAlarms = {
     };
 }
 
-type ChromeRuntime = {
-    sendMessage?: (_message: WorkerEvent) => void;
-}
-
 type ChromeApi = {
     alarms?: ChromeAlarms;
-    runtime?: ChromeRuntime;
 }
 
 let isTickRunning = false;
 
 const getChromeApi = () => {
     return (globalThis as typeof globalThis & { chrome?: ChromeApi }).chrome;
-}
-
-const broadcastWorkerEvent = (event: WorkerEvent) => {
-    try {
-        getChromeApi()?.runtime?.sendMessage?.(event);
-    } catch {
-        // Extension views may be closed. Polling should continue quietly.
-    }
 }
 
 const broadcastLiveState = (orgId: SalesforceOrgId, state: LivePollingState) => {
@@ -90,6 +79,9 @@ export const liveLogPoller = {
             const session = sessionStore.get() ?? await sessionStore.restore();
 
             if (!session) {
+                // Session was lost between polls (cookie expired, user signed out, etc).
+                // Broadcast so any open UI stops showing a stale "Live Streaming" state.
+                broadcastWorkerEvent({ event: 'SESSION_EXPIRED' });
                 return [];
             }
 
@@ -116,6 +108,18 @@ export const liveLogPoller = {
 
             return result.logs;
         } catch (error) {
+            // A 401 means the Salesforce session ID itself is dead (expired,
+            // revoked, timeout policy) - retrying it every alarm tick would just
+            // keep cycling "syncing" -> "offline" forever instead of surfacing
+            // that the user needs to reconnect. Clearing the session here makes
+            // every subsequent tick take the `!session` branch above, which
+            // already broadcasts SESSION_EXPIRED consistently.
+            if (error instanceof SalesforceSessionExpiredError) {
+                await sessionStore.clear();
+                broadcastWorkerEvent({ event: 'SESSION_EXPIRED' });
+                return [];
+            }
+
             const session = sessionStore.get();
 
             if (session) {

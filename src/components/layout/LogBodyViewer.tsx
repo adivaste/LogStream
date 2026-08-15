@@ -1,9 +1,18 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Bug, Check, Code2, Copy, Download, Search } from "lucide-react";
+import { Bug, Check, Code2, Copy, Download, Search, WrapText } from "lucide-react";
 import React from "react";
+
+import { ScrollArea, ScrollAreaScrollbar, ScrollAreaViewport } from "@/components/ui/scroll-area";
+import { useElementScrollEdges } from "@/hooks/useScrollEdgeFade";
 
 const LOG_LINE_HEIGHT = 24;
 const LOG_VIEWER_OVERSCAN = 24;
+
+// Layout of a row: a fixed 4.5rem line-number column, then the content
+// column with 0.75rem (px-3) padding on both sides.
+const LOG_LINE_NUMBER_COLUMN_PX = 72;
+const LOG_CONTENT_PADDING_PX = 24;
+const CHAR_WIDTH_PROBE_LENGTH = 80;
 
 const APEX_TOKEN_PATTERN = /(FATAL_ERROR|EXCEPTION_THROWN|System\.[A-Za-z]+Exception|SOQL_EXECUTE_BEGIN|SOQL_EXECUTE_END|DML_BEGIN|DML_END|CUMULATIVE_LIMIT_USAGE|LIMIT_USAGE_FOR_NS|USER_DEBUG|METHOD_ENTRY|METHOD_EXIT)/g;
 const APEX_TOKEN_EXACT_PATTERN = /^(FATAL_ERROR|EXCEPTION_THROWN|System\.[A-Za-z]+Exception|SOQL_EXECUTE_BEGIN|SOQL_EXECUTE_END|DML_BEGIN|DML_END|CUMULATIVE_LIMIT_USAGE|LIMIT_USAGE_FOR_NS|USER_DEBUG|METHOD_ENTRY|METHOD_EXIT)$/;
@@ -106,16 +115,34 @@ const isExecutableLine = (line: string) => {
 
 function LogBodyViewer({ body, fileName }: LogBodyViewerProps) {
     const scrollParentRef = React.useRef<HTMLDivElement | null>(null);
+    const charWidthProbeRef = React.useRef<HTMLSpanElement | null>(null);
     const copyFeedbackTimeoutRef = React.useRef<number | null>(null);
     const downloadFeedbackTimeoutRef = React.useRef<number | null>(null);
+    // TanStack Virtual skips remeasuring rows while the user is actively
+    // scrolling (a deliberate perf trade-off), so a newly-revealed wrapped
+    // row keeps using its *initial estimate* until scrolling settles. If
+    // that estimate is way off (a flat 24px vs. a line that actually wraps
+    // into 6 visual lines), the row visibly overlaps the one below it until
+    // it "catches up". The fix is to make the estimate itself accurate:
+    // measure the monospace character width once, track the available
+    // content width, and estimate each wrapped row's height from its exact
+    // character count - close enough that there's nothing visible to correct.
+    const charWidthPxRef = React.useRef(LOG_LINE_HEIGHT * 0.42);
+    const contentWidthPxRef = React.useRef(0);
     const [searchQuery, setSearchQuery] = React.useState('');
     const [activeMatchIndex, setActiveMatchIndex] = React.useState(-1);
     const [viewFilter, setViewFilter] = React.useState<LogViewFilter>('all');
+    const [isWrapEnabled, setIsWrapEnabled] = React.useState(false);
     const [isCopyFeedbackVisible, setIsCopyFeedbackVisible] = React.useState(false);
     const [isDownloadFeedbackVisible, setIsDownloadFeedbackVisible] = React.useState(false);
+    const scrollEdges = useElementScrollEdges(scrollParentRef);
 
     const lines = React.useMemo(() => {
-        return body.split(/\r?\n/);
+        // Log bodies almost always end with a trailing newline, which
+        // `.split` turns into one extra empty "line" at the end - strip a
+        // single trailing newline first so that phantom blank line doesn't
+        // show up (genuine blank lines elsewhere in the body are untouched).
+        return body.replace(/\r?\n$/, '').split(/\r?\n/);
     }, [body]);
 
     const visibleLineIndexes = React.useMemo(() => {
@@ -171,11 +198,78 @@ function LogBodyViewer({ body, fileName }: LogBodyViewerProps) {
     const lineVirtualizer = useVirtualizer({
         count: visibleLineCount,
         getScrollElement: () => scrollParentRef.current,
-        estimateSize: () => LOG_LINE_HEIGHT,
+        estimateSize: (index) => {
+            if (!isWrapEnabled) {
+                return LOG_LINE_HEIGHT;
+            }
+
+            const availableWidthPx = contentWidthPxRef.current - LOG_LINE_NUMBER_COLUMN_PX - LOG_CONTENT_PADDING_PX;
+            const charsPerLine = Math.max(1, Math.floor(availableWidthPx / charWidthPxRef.current));
+            const line = lines[getSourceLineIndex(index)] ?? '';
+            const wrappedLineCount = Math.max(1, Math.ceil(line.length / charsPerLine));
+
+            return wrappedLineCount * LOG_LINE_HEIGHT;
+        },
         overscan: LOG_VIEWER_OVERSCAN
     });
 
     const virtualLines = lineVirtualizer.getVirtualItems();
+
+    // Measure the monospace character's advance width once - it's uniform
+    // for every character, which is what makes an accurate char-count-based
+    // height estimate possible at all.
+    React.useLayoutEffect(() => {
+        const probe = charWidthProbeRef.current;
+
+        if (!probe) {
+            return;
+        }
+
+        const probeWidth = probe.getBoundingClientRect().width;
+
+        if (probeWidth > 0) {
+            charWidthPxRef.current = probeWidth / CHAR_WIDTH_PROBE_LENGTH;
+        }
+    }, []);
+
+    // Wrapped rows have variable height (react-virtual measures them via
+    // measureElement below), so any previously cached height is invalidated
+    // the moment wrap is toggled or the panel is resized - the number of
+    // visual lines a row wraps into depends on the container width. The
+    // content width must be set (synchronously, in this same effect) *before*
+    // calling measure() - otherwise estimateSize briefly reads a stale/zero
+    // width and every row estimates as 1 char per line.
+    React.useEffect(() => {
+        const scrollElement = scrollParentRef.current;
+
+        if (!isWrapEnabled || !scrollElement) {
+            lineVirtualizer.measure();
+            return;
+        }
+
+        contentWidthPxRef.current = scrollElement.clientWidth;
+        lineVirtualizer.measure();
+
+        if (typeof ResizeObserver === 'undefined') {
+            return;
+        }
+
+        const resizeObserver = new ResizeObserver((entries) => {
+            const nextWidth = entries[0]?.contentRect.width;
+
+            if (nextWidth) {
+                contentWidthPxRef.current = nextWidth;
+            }
+
+            lineVirtualizer.measure();
+        });
+
+        resizeObserver.observe(scrollElement);
+
+        return () => {
+            resizeObserver.disconnect();
+        };
+    }, [isWrapEnabled, lineVirtualizer]);
 
     const activeMatchLineIndex = matchingLineIndexes[activeMatchIndex] ?? -1;
 
@@ -282,10 +376,10 @@ function LogBodyViewer({ body, fileName }: LogBodyViewerProps) {
 
     const getActionButtonClassName = (isFeedbackVisible = false) => {
         return `
-            rounded-md border p-2 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500
+            rounded-md border-0 p-2 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500
             ${isFeedbackVisible
-        ? 'border-emerald-600/30 bg-emerald-500/15 text-emerald-700 dark:border-emerald-500/30 dark:text-emerald-300'
-        : 'border-input bg-input/30 text-muted-foreground hover:text-primary'}
+        ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+        : 'bg-input/80 dark:bg-input/80 text-muted-foreground hover:text-primary hover:bg-input/90 dark:hover:bg-input/90'}
         `;
     }
 
@@ -294,11 +388,11 @@ function LogBodyViewer({ body, fileName }: LogBodyViewerProps) {
     }
 
     return (
-        <section className="flex min-h-0 flex-1 flex-col border-t border-border antialiased">
+        <section className="flex min-h-0 flex-1 flex-col border-t border-border">
             <div className="flex items-center gap-2 border-b border-border px-4 py-2">
                 <div className="
-                    flex h-8 min-w-0 flex-1 items-center gap-2 border border-input rounded-md bg-input/30 px-2
-                    focus-within:border-ring focus-within:ring-[2px] focus-within:ring-ring/40
+                    flex h-8 min-w-0 flex-1 items-center gap-2 border-0 rounded-md bg-input/80 dark:bg-input/80 px-2
+                    focus-within:ring-[2px] focus-within:ring-ring/40
                 ">
                     <Search size={15} className="shrink-0 text-muted-foreground" />
                     <input
@@ -353,6 +447,17 @@ function LogBodyViewer({ body, fileName }: LogBodyViewerProps) {
 
                 <button
                     type="button"
+                    title="Wrap lines"
+                    aria-label="Toggle line wrapping"
+                    aria-pressed={isWrapEnabled}
+                    onClick={() => setIsWrapEnabled(wrapped => !wrapped)}
+                    className={getActionButtonClassName(isWrapEnabled)}
+                >
+                    <WrapText size={15} />
+                </button>
+
+                <button
+                    type="button"
                     title={isDownloadFeedbackVisible ? 'Downloaded' : 'Download log'}
                     aria-label={isDownloadFeedbackVisible ? 'Downloaded log' : 'Download log'}
                     onClick={handleDownload}
@@ -362,43 +467,83 @@ function LogBodyViewer({ body, fileName }: LogBodyViewerProps) {
                 </button>
             </div>
 
-            <div
-                ref={scrollParentRef}
-                className="min-h-0 flex-1 overflow-auto bg-background font-mono text-sm"
-            >
-                <div
-                    className="relative"
-                    style={{ height: `${lineVirtualizer.getTotalSize()}px` }}
-                >
-                    {virtualLines.map((virtualLine) => {
-                        const sourceLineIndex = getSourceLineIndex(virtualLine.index);
-                        const line = lines[sourceLineIndex] ?? '';
-                        const lineNumber = sourceLineIndex + 1;
-                        const isActiveMatchLine = virtualLine.index === activeMatchLineIndex;
+            <ScrollArea className="min-h-0 flex-1 bg-sidebar font-mono text-sm">
+                <ScrollAreaViewport ref={scrollParentRef} className="overscroll-contain">
+                    <span
+                        ref={charWidthProbeRef}
+                        aria-hidden="true"
+                        className="pointer-events-none invisible absolute left-0 top-0 whitespace-pre text-sm"
+                    >
+                        {'M'.repeat(CHAR_WIDTH_PROBE_LENGTH)}
+                    </span>
 
-                        return (
-                            <div
-                                key={virtualLine.key}
-                                className={`
-                                    absolute left-0 top-0 grid min-w-full grid-cols-[4.5rem_max-content] whitespace-pre
-                                    ${isActiveMatchLine ? 'bg-orange-500/10' : ''}
-                                `}
-                                style={{
-                                    height: `${virtualLine.size}px`,
-                                    transform: `translateY(${virtualLine.start}px)`
-                                }}
-                            >
-                                <div className="sticky left-0 z-10 border-r border-border/70 bg-background pr-3 text-right text-sm leading-6 text-muted-foreground/70">
-                                    {lineNumber}
+                    {/* Sticky within the scrolling ancestor above, not the page -
+                        fades in only once there's cut-off content in that direction. */}
+                    <div
+                        aria-hidden="true"
+                        className={`
+                            pointer-events-none sticky top-0 z-10 -mb-4 h-4
+                            bg-gradient-to-b from-sidebar to-transparent
+                            transition-opacity duration-150
+                            ${scrollEdges.atTop ? 'opacity-0' : 'opacity-100'}
+                        `}
+                    />
+
+                    <div
+                        className="relative"
+                        style={{ height: `${lineVirtualizer.getTotalSize()}px` }}
+                    >
+                        {virtualLines.map((virtualLine) => {
+                            const sourceLineIndex = getSourceLineIndex(virtualLine.index);
+                            const line = lines[sourceLineIndex] ?? '';
+                            const lineNumber = sourceLineIndex + 1;
+                            const isActiveMatchLine = virtualLine.index === activeMatchLineIndex;
+
+                            return (
+                                <div
+                                    key={virtualLine.key}
+                                    data-index={virtualLine.index}
+                                    ref={isWrapEnabled ? lineVirtualizer.measureElement : undefined}
+                                    className={`
+                                        absolute left-0 top-0 grid
+                                        ${isWrapEnabled
+                                    ? 'w-full grid-cols-[4.5rem_minmax(0,1fr)] items-start'
+                                    : 'min-w-full grid-cols-[4.5rem_max-content] whitespace-pre'}
+                                        ${isActiveMatchLine ? 'bg-orange-500/10' : ''}
+                                    `}
+                                    style={{
+                                        // Fixed-height rows are cheap to position with a fixed height;
+                                        // wrapped rows are measured, so let content define the height
+                                        // instead of forcing the (now stale) estimate.
+                                        height: isWrapEnabled ? undefined : `${virtualLine.size}px`,
+                                        transform: `translateY(${virtualLine.start}px)`
+                                    }}
+                                >
+                                    <div className="sticky left-0 z-10 select-none border-r border-border/70 bg-sidebar pr-3 text-right text-sm leading-6 text-muted-foreground/70">
+                                        {lineNumber}
+                                    </div>
+                                    <div
+                                        className={`px-3 text-sm leading-6 text-muted-foreground ${isWrapEnabled ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'}`}
+                                    >
+                                        {renderHighlightedLine(line, deferredSearchQuery)}
+                                    </div>
                                 </div>
-                                <div className="px-3 text-sm leading-6 text-muted-foreground">
-                                    {renderHighlightedLine(line, deferredSearchQuery)}
-                                </div>
-                            </div>
-                        );
-                    })}
-                </div>
-            </div>
+                            );
+                        })}
+                    </div>
+
+                    <div
+                        aria-hidden="true"
+                        className={`
+                            pointer-events-none sticky bottom-0 z-10 -mt-4 h-4
+                            bg-gradient-to-t from-sidebar to-transparent
+                            transition-opacity duration-150
+                            ${scrollEdges.atBottom ? 'opacity-0' : 'opacity-100'}
+                        `}
+                    />
+                </ScrollAreaViewport>
+                <ScrollAreaScrollbar />
+            </ScrollArea>
         </section>
     );
 }

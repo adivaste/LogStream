@@ -18,6 +18,9 @@ export type AppPreferences = {
     appearance: {
         theme: Theme;
     };
+    preferences: {
+        showInsights: boolean;
+    };
     logTable: {
         sortBy: SortBy;
         sortDirection: SortDirection;
@@ -32,6 +35,9 @@ export const DEFAULT_APP_PREFERENCES: AppPreferences = {
     version: APP_PREFERENCES_VERSION,
     appearance: {
         theme: 'light'
+    },
+    preferences: {
+        showInsights: true
     },
     logTable: {
         sortBy: SortBy.TIMESTAMP,
@@ -49,6 +55,10 @@ const isObject = (value: unknown): value is Record<string, unknown> => {
 
 const isTheme = (value: unknown): value is Theme => {
     return value === 'light' || value === 'dark';
+}
+
+const isBoolean = (value: unknown): value is boolean => {
+    return typeof value === 'boolean';
 }
 
 const isSortBy = (value: unknown): value is SortBy => {
@@ -110,6 +120,7 @@ const normalizePreferences = (value: unknown): AppPreferences => {
     }
 
     const appearance = isObject(value.appearance) ? value.appearance : {};
+    const preferences = isObject(value.preferences) ? value.preferences : {};
     const logTable = isObject(value.logTable) ? value.logTable : {};
     const connection = isObject(value.connection) ? value.connection : {};
     const recentOrgs = Array.isArray(connection.recentOrgs)
@@ -124,6 +135,11 @@ const normalizePreferences = (value: unknown): AppPreferences => {
             theme: isTheme(appearance.theme)
                 ? appearance.theme
                 : getLegacyTheme() ?? DEFAULT_APP_PREFERENCES.appearance.theme
+        },
+        preferences: {
+            showInsights: isBoolean(preferences.showInsights)
+                ? preferences.showInsights
+                : DEFAULT_APP_PREFERENCES.preferences.showInsights
         },
         logTable: {
             sortBy: isSortBy(logTable.sortBy)
@@ -228,6 +244,16 @@ export const persistThemePreference = (theme: Theme) => {
         appearance: {
             ...preferences.appearance,
             theme
+        }
+    }));
+}
+
+export const persistShowInsightsPreference = (showInsights: boolean) => {
+    updateAppPreferences(preferences => ({
+        ...preferences,
+        preferences: {
+            ...preferences.preferences,
+            showInsights
         }
     }));
 }

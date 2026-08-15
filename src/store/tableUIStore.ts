@@ -3,11 +3,32 @@ import {
     persistLogTableSortingPreference,
     readAppPreferences
 } from "@/lib/appPreferences";
-import { 
+import { sendWorkerRequest } from "@/services/backgroundBridge";
+import { useUIStore } from "@/store/uiStore";
+import {
     type LogEntry,
     SortBy,
     SortDirection
 } from "../types/ui";
+
+// Persists read state to IndexedDB (via the background worker) so a reload
+// doesn't show every log as unread again - `logReadAtById` alone only lived
+// in this tab's in-memory store. Fire-and-forget: the local state update
+// already reflects "read" immediately, this just makes it survive a reload.
+const persistLogRead = (logId: string, readAt: string) => {
+    const orgId = useUIStore.getState().connectionInfo?.orgId;
+
+    if (!orgId) {
+        return;
+    }
+
+    void sendWorkerRequest({
+        type: 'MARK_LOG_READ',
+        orgId,
+        logId,
+        readAt
+    });
+}
 
 
 // State
@@ -18,6 +39,8 @@ type TableUIState = {
     selectedUser: string | null;
     startTime: Date;
     endTime: Date;
+    minSizeBytes: number | null;
+    maxSizeBytes: number | null;
     focusedLogId: string | null;
     selectedLog: LogEntry | null;
     logReadAtById: Record<string, string>;
@@ -28,6 +51,7 @@ type TableUIActions = {
     setSearchQuery(_query: string): void;
     setSelectedUser(_user: string | null): void;
     setTimeRange(_startTime: Date, _endTime: Date): void;
+    setSizeRange(_minSizeBytes: number | null, _maxSizeBytes: number | null): void;
     clearFilters(): void;
     isDefaultFilterRange(): boolean;
     setFocusedLogId(_logId: string | null): void;
@@ -68,6 +92,8 @@ export const useTableUIStore = create<TableUIStore>((set) => ({
     selectedUser: null,
     startTime: createDefaultFilterStartTime(),
     endTime: createDefaultFilterEndTime(),
+    minSizeBytes: null,
+    maxSizeBytes: null,
     focusedLogId: null,
     selectedLog: null,
     logReadAtById: {},
@@ -81,11 +107,14 @@ export const useTableUIStore = create<TableUIStore>((set) => ({
     setSearchQuery: (query: string) => set({ searchQuery: query }),
     setSelectedUser: (selectedUser: string | null) => set({ selectedUser }),
     setTimeRange: (startTime: Date, endTime: Date) => set({ startTime, endTime }),
+    setSizeRange: (minSizeBytes: number | null, maxSizeBytes: number | null) => set({ minSizeBytes, maxSizeBytes }),
     clearFilters: () => set({
         searchQuery: DEFAULT_SEARCH_QUERY,
         selectedUser: null,
         startTime: createDefaultFilterStartTime(),
-        endTime: createDefaultFilterEndTime()
+        endTime: createDefaultFilterEndTime(),
+        minSizeBytes: null,
+        maxSizeBytes: null
     }),
     isDefaultFilterRange: () => {
         const state = useTableUIStore.getState();
@@ -93,7 +122,9 @@ export const useTableUIStore = create<TableUIStore>((set) => ({
         const defaultEndTime = createDefaultFilterEndTime();
 
         return state.startTime.getTime() === defaultStartTime.getTime()
-            && state.endTime.getTime() === defaultEndTime.getTime();
+            && state.endTime.getTime() === defaultEndTime.getTime()
+            && state.minSizeBytes === null
+            && state.maxSizeBytes === null;
     },
     setFocusedLogId: (logId: string | null) => set(state => (
         state.focusedLogId === logId ? state : { focusedLogId: logId }
@@ -104,6 +135,10 @@ export const useTableUIStore = create<TableUIStore>((set) => ({
     markLogRead: (log: LogEntry) => {
         const readAt = log.readAt ?? new Date().toISOString();
         const readLog = { ...log, readAt };
+
+        if (!log.readAt) {
+            persistLogRead(log.id, readAt);
+        }
 
         set(state => {
             if (!log.readAt) {
@@ -121,6 +156,10 @@ export const useTableUIStore = create<TableUIStore>((set) => ({
     selectLog: (log: LogEntry) => {
         const readAt = log.readAt ?? new Date().toISOString();
         const readLog = { ...log, readAt };
+
+        if (!log.readAt) {
+            persistLogRead(log.id, readAt);
+        }
 
         set(state => {
             if (!log.readAt) {

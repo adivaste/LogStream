@@ -1,5 +1,6 @@
-import { Clock3, FileText, HardDrive, X } from "lucide-react";
+import { AlertCircle, Clock3, FileText, HardDrive, Loader2, X } from "lucide-react";
 import React from "react";
+import { EmptyState } from "@/components/ui/empty-state";
 import { formatByteSize, countLogBodyLines } from "@/lib/logBodyMeta";
 import { useLogBody } from "@/hooks/useLogBody";
 import { useTableUIStore } from "@/store/tableUIStore";
@@ -25,6 +26,7 @@ function LogPanel() {
         pointerX: number;
         panelWidth: number;
     } | null>(null);
+    const closeButtonRef = React.useRef<HTMLButtonElement>(null);
 
     const clampPanelWidth = React.useCallback((width: number) => {
         const maxPanelWidth = Math.floor(window.innerWidth * MAX_PANEL_WIDTH_RATIO);
@@ -57,6 +59,16 @@ function LogPanel() {
             window.removeEventListener('keydown', handleKeyDown);
         }
     }, [isLogPanelOpen, setLogPanelOpen]);
+
+    React.useEffect(() => {
+        if (!isLogPanelOpen) {
+            return;
+        }
+
+        // Move focus into the panel when it opens so keyboard/screen-reader
+        // users notice it and Tab doesn't drift behind it.
+        closeButtonRef.current?.focus();
+    }, [isLogPanelOpen, selectedLogId]);
 
     React.useEffect(() => {
         if (!isLogPanelOpen) {
@@ -102,6 +114,24 @@ function LogPanel() {
         }
     }
 
+    const RESIZE_KEY_STEP = 24;
+
+    const handleResizeKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+        if (event.key === 'ArrowLeft') {
+            event.preventDefault();
+            setPanelWidth(width => clampPanelWidth(width + RESIZE_KEY_STEP));
+        } else if (event.key === 'ArrowRight') {
+            event.preventDefault();
+            setPanelWidth(width => clampPanelWidth(width - RESIZE_KEY_STEP));
+        } else if (event.key === 'Home') {
+            event.preventDefault();
+            setPanelWidth(clampPanelWidth(MIN_PANEL_WIDTH));
+        } else if (event.key === 'End') {
+            event.preventDefault();
+            setPanelWidth(clampPanelWidth(DEFAULT_PANEL_WIDTH));
+        }
+    }
+
     if (!isLogPanelOpen || !selectedLog) {
         return null;
     }
@@ -110,8 +140,8 @@ function LogPanel() {
         <aside
             aria-label="Selected log details"
             className="
-                fixed right-0 top-0 z-20 flex h-screen flex-col antialiased
-                border-l border-border bg-background shadow-lg
+                fixed right-0 top-0 z-20 flex h-screen flex-col
+                border-l border-border bg-sidebar shadow-lg
             "
             style={{ width: `${panelWidth}px` }}
         >
@@ -119,11 +149,15 @@ function LogPanel() {
                 role="separator"
                 aria-orientation="vertical"
                 aria-label="Resize log details panel"
+                aria-valuenow={panelWidth}
+                aria-valuemin={MIN_PANEL_WIDTH}
+                aria-valuemax={Math.floor(window.innerWidth * MAX_PANEL_WIDTH_RATIO)}
                 tabIndex={0}
                 onPointerDown={handleResizePointerDown}
                 onPointerMove={handleResizePointerMove}
                 onPointerUp={handleResizePointerEnd}
                 onPointerCancel={handleResizePointerEnd}
+                onKeyDown={handleResizeKeyDown}
                 className="
                     absolute left-0 top-0 h-full w-2 -translate-x-1 cursor-col-resize
                     touch-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500
@@ -159,6 +193,7 @@ function LogPanel() {
                 </div>
 
                 <button
+                    ref={closeButtonRef}
                     type="button"
                     aria-label="Close log details"
                     onClick={() => setLogPanelOpen(false)}
@@ -173,21 +208,22 @@ function LogPanel() {
             </header>
 
             {isLogBodyLoading ? (
-                <div className="flex flex-1 flex-col items-center justify-center gap-3 border-t border-border">
-                    <div
-                        aria-hidden="true"
-                        className="
-                            h-6 w-6 animate-spin rounded-full border-[3px]
-                            border-emerald-500/20 border-t-emerald-400 border-r-emerald-400
-                        "
+                <div className="flex flex-1 items-center justify-center border-t border-border">
+                    <EmptyState
+                        icon={Loader2}
+                        iconClassName="[&_svg]:animate-spin"
+                        title="Loading log body"
+                        description="Fetching the full log content..."
                     />
-                    <span className="text-sm text-muted-foreground font-sans">
-                        Loading log body...
-                    </span>
                 </div>
             ) : logBodyStatus === 'failed' ? (
-                <div className="flex flex-1 items-center justify-center border-t border-border px-8 text-center text-sm text-destructive">
-                    {logBodyErrorMessage ?? 'Failed to load log body.'}
+                <div className="flex flex-1 items-center justify-center border-t border-border">
+                    <EmptyState
+                        icon={AlertCircle}
+                        tone="destructive"
+                        title="Couldn't load log body"
+                        description={logBodyErrorMessage ?? 'Something went wrong while fetching this log.'}
+                    />
                 </div>
             ) : (
                 <LogBodyViewer

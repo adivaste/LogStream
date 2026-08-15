@@ -126,6 +126,30 @@ export const logRepository = {
         );
     },
 
+    // Read/unread state must survive a reload - previously it only lived in
+    // the tab's in-memory Zustand store, so every reload showed every log as
+    // unread again. Persisting `readAt` onto the same stored record means it
+    // comes back naturally through getPage/getById on the next load.
+    async markRead(orgId: SalesforceOrgId, logId: SalesforceLogId, readAt: string) {
+        const storageKey = createOrgScopedStorageKey(orgId, logId);
+        const readTransaction = await createReadonlyTransaction(LOGSTREAM_STORES.logs);
+        const readStore = readTransaction.objectStore(LOGSTREAM_STORES.logs);
+        const existing = await requestToPromise<LogStorageRecord | undefined>(
+            readStore.get(storageKey) as IDBRequest<LogStorageRecord | undefined>
+        );
+
+        if (!existing || existing.readAt) {
+            return;
+        }
+
+        const writeTransaction = await createReadwriteTransaction(LOGSTREAM_STORES.logs);
+        const writeStore = writeTransaction.objectStore(LOGSTREAM_STORES.logs);
+
+        writeStore.put({ ...existing, readAt });
+
+        await transactionDone(writeTransaction);
+    },
+
     async getPage(
         orgId: SalesforceOrgId,
         cursor: LogPageCursor = null,

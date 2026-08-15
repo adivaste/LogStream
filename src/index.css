@@ -8,9 +8,9 @@
 :root {
 
     /* Fonts */
-    --font-sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
+    --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
     --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    --font-serif: 'Geist', ui-sans-serif, system-ui, sans-serif;
+    --font-serif: 'Inter', ui-sans-serif, system-ui, sans-serif;
 
     /* Background Colors */
     --background: oklch(1 0 0);
@@ -74,9 +74,19 @@
 }
 
 @theme inline {
-    --font-sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
+    --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
     --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    --font-serif: 'Geist', ui-sans-serif, system-ui, sans-serif;
+    --font-serif: 'Inter', ui-sans-serif, system-ui, sans-serif;
+
+    /* Geist reads cleanest at 400 for body copy. Cap every "bold" utility at
+       500 instead of the default 600/700 so emphasis stays subtle and only
+       two weights (400, 500) ever need to be loaded. */
+    --font-weight-medium: 500;
+    --font-weight-semibold: 500;
+    --font-weight-bold: 500;
+    --font-weight-extrabold: 500;
+    --font-weight-black: 500;
+
     --radius-sm: calc(var(--radius) - 4px);
     --radius-md: calc(var(--radius) - 2px);
     --radius-lg: var(--radius);
@@ -157,9 +167,21 @@
     }
   html {
     font-family: var(--font-sans);
+    text-rendering: optimizeLegibility;
     }
   body {
-    @apply bg-background text-foreground font-sans antialiased;
+    @apply bg-background text-foreground font-sans;
+    }
+
+  /* -webkit-font-smoothing: antialiased disables Windows' native ClearType
+     subpixel hinting in favor of grayscale AA - an improvement on macOS
+     Retina displays, but flatter/blurrier on standard-DPI Windows screens.
+     Only force it where it actually helps: high pixel-density displays. */
+  @media (min-resolution: 1.5dppx) {
+    html {
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        }
     }
   button,
   input,
@@ -168,8 +190,17 @@
     font: inherit;
     }
 
+  /* Scrollbars stay invisible until the user actually scrolls (any nested
+     scrollable region - `data-scrolling` is set globally on <html> from a
+     capture-phase listener in App.tsx) or hovers directly over one, rather
+     than sitting permanently visible on every scrollable panel. */
   * {
     scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+    }
+
+  html[data-scrolling] *,
+  *:hover {
     scrollbar-color: oklch(0.38 0.01 286) transparent;
     }
 
@@ -183,10 +214,16 @@
     }
 
   *::-webkit-scrollbar-thumb {
-    background-color: oklch(0.38 0.01 286);
+    background-color: transparent;
     border: 2px solid transparent;
     border-radius: 999px;
     background-clip: content-box;
+    transition: background-color 0.15s ease;
+    }
+
+  html[data-scrolling] *::-webkit-scrollbar-thumb,
+  *:hover::-webkit-scrollbar-thumb {
+    background-color: oklch(0.38 0.01 286);
     }
 
   *::-webkit-scrollbar-thumb:hover {

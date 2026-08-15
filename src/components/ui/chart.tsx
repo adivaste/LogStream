@@ -52,10 +52,9 @@ function ChartTooltipContent({
     const value = payload[0]?.value;
 
     return (
-        <div className="rounded-md border border-border bg-background px-3 py-2 shadow-sm">
-            <p className="text-xs text-muted-foreground">Minute: {label}</p>
+        <div className="rounded-md bg-background px-3 py-2 shadow-md">
+            <p className="text-xs text-muted-foreground">{label}</p>
             <p className="text-sm font-medium">Logs: {value}</p>
-            <p className="text-sm font-medium">Errors: {value-4}</p>
         </div>
     );
 }

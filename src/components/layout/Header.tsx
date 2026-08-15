@@ -1,40 +1,41 @@
 import React from 'react';
-import { SalesforceEnvironment } from '@/types/salesforce';
 
 import { useUIStore } from '@/store/uiStore';
-import { connectSalesforceOrg } from '@/services/salesforceConnection';
 
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button';
+import { IconCrossfade } from '../ui/icon-crossfade';
 import { Popover, PopoverTrigger } from '../ui/popover';
 import { ApiLimitPopover } from './ApiLimitPopover';
 import { KeyboardShortcutsPopover } from './KeyboardShortcutsPopover';
 import { TraceFlagPopover } from './TraceFlagPopover';
 
-import { 
+import {
     Settings,
     Bug,
     Moon,
     PlugZap,
     Gauge,
-    Keyboard
+    Keyboard,
+    Sun
 } from 'lucide-react';
 
-type SessionDetectionState =
-    | 'idle'
-    | 'detecting'
-    | 'connected'
-    | 'not_found'
-    | 'failed';
+// Borderless, elevated-background treatment for every header toolbar button -
+// bg-input/80 (up from the outline variant's default bg-input/30) reads as a
+// solid, cleaner surface without needing a border for definition. The
+// dark: variants are required, not redundant: Button's own `outline` variant
+// bakes in `dark:bg-input/30`/`dark:hover:bg-input/50`, which is a *different*
+// variant scope from a plain `bg-input/80` as far as tailwind-merge is
+// concerned - without an explicit dark: override here, cascade order (not
+// this className) would decide which one wins in dark mode.
+const HEADER_BUTTON_CLASSNAME = 'cursor-pointer border-0 bg-input/80 hover:bg-input/90 dark:bg-input/80 dark:hover:bg-input/90';
 
 function Header() {
 
     // Data
-    const organizationName: string = "Acme";
-    const environment: SalesforceEnvironment = SalesforceEnvironment.Production;
     const connectionInfo = useUIStore(state => state.connectionInfo);
-    const setConnectionInfo = useUIStore(state => state.setConnectionInfo);
-    const [sessionDetectionState, setSessionDetectionState] = React.useState<SessionDetectionState>('idle');
+    const sessionDetectionState = useUIStore(state => state.sessionDetectionState);
+    const refreshSession = useUIStore(state => state.refreshSession);
 
     // State
     const isLiveStreamOn: boolean = useUIStore(state => state.isLiveStreamOn);
@@ -43,6 +44,7 @@ function Header() {
     const [isApiLimitPopoverOpen, setIsApiLimitPopoverOpen] = React.useState(false);
     const isShortcutsPopoverOpen: boolean = useUIStore(state => state.isShortcutsPopoverOpen);
     const isSettingsModalOpen: boolean = useUIStore(state => state.isSettingsModalOpen);
+    const theme = useUIStore(state => state.theme);
 
     // Event Handlers
     const handleDarkModeToggle = useUIStore(state => state.toggleTheme);
@@ -103,7 +105,18 @@ function Header() {
         return 'bg-muted-foreground';
     }, [livePollingState]);
 
+    // The background can lose the Salesforce session between detections (cookie
+    // expiry, sign-out, service worker restart) and reports it via
+    // livePollingState. Without this check the badge would keep showing the
+    // last-detected org as "connected" even after the live stream pill says
+    // "Session Expired" - the two indicators must agree.
+    const isSessionExpired = livePollingState === 'session_expired';
+
     const sessionBadgeLabel = React.useMemo(() => {
+        if (isSessionExpired) {
+            return 'Session expired - reconnect';
+        }
+
         if (sessionDetectionState === 'detecting') {
             return 'Detecting org...';
         }
@@ -120,10 +133,14 @@ function Header() {
             return 'No Salesforce org';
         }
 
-        return `${organizationName} - ${environment}`;
-    }, [connectionInfo, environment, organizationName, sessionDetectionState]);
+        return 'Not connected';
+    }, [connectionInfo, isSessionExpired, sessionDetectionState]);
 
     const sessionBadgeClassName = React.useMemo(() => {
+        if (isSessionExpired) {
+            return 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300';
+        }
+
         if (sessionDetectionState === 'connected') {
             return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300';
         }
@@ -141,20 +158,7 @@ function Header() {
         }
 
         return '';
-    }, [sessionDetectionState]);
-
-    const handleRefreshSession = React.useCallback(async () => {
-        setSessionDetectionState('detecting');
-
-        try {
-            const result = await connectSalesforceOrg();
-            setConnectionInfo(result.connectionInfo);
-            setSessionDetectionState(result.status === 'connected' ? 'connected' : 'not_found');
-        } catch {
-            setConnectionInfo(null);
-            setSessionDetectionState('failed');
-        }
-    }, [setConnectionInfo]);
+    }, [isSessionExpired, sessionDetectionState]);
 
     // Render
     return (
@@ -206,7 +210,7 @@ function Header() {
                     role='switch'
                     aria-label='Live Log Stream Toggle'
                     aria-checked={isLiveStreamOn}
-                    className='border-zinc-200 rounded-md px-4 cursor-pointer' 
+                    className={`rounded-md px-4 ${HEADER_BUTTON_CLASSNAME}`}
                     onClick={handleLiveStreamToggle}
                 >
                     <div className='flex items-center gap-2'>
@@ -223,10 +227,10 @@ function Header() {
                     aria-label='Detect Salesforce Session'
                     aria-busy={sessionDetectionState === 'detecting'}
                     className={`
-                        cursor-pointer
-                        ${sessionDetectionState === 'connected' ? 'border-emerald-500/30 text-emerald-600 dark:text-emerald-300' : ''}
+                        ${HEADER_BUTTON_CLASSNAME}
+                        ${sessionDetectionState === 'connected' ? 'text-emerald-600 dark:text-emerald-300' : ''}
                     `}
-                    onClick={handleRefreshSession}
+                    onClick={() => void refreshSession()}
                 >
                     <PlugZap className={`w-5 h-5 ${sessionDetectionState === 'detecting' ? 'animate-pulse' : ''}`} />
                 </Button>
@@ -243,7 +247,7 @@ function Header() {
                             title='API Limit Usage'
                             aria-label='API Limit Usage'
                             aria-expanded={isApiLimitPopoverOpen}
-                            className='cursor-pointer'
+                            className={HEADER_BUTTON_CLASSNAME}
                         >
                             <Gauge className='w-5 h-5' />
                         </Button>
@@ -263,12 +267,12 @@ function Header() {
                             title='Set Trace Flag' 
                             aria-label='Set Trace Flag' 
                             aria-expanded={isTraceFlagPopoverOpen}
-                            className='cursor-pointer'
+                            className={HEADER_BUTTON_CLASSNAME}
                         >
                             <Bug className='w-5 h-5' />
                         </Button>
                     </PopoverTrigger>
-                    <TraceFlagPopover />
+                    <TraceFlagPopover isOpen={isTraceFlagPopoverOpen} />
                 </Popover>
 
                 {/* Keyboard Shortcuts */}
@@ -283,7 +287,7 @@ function Header() {
                             title='Keyboard Shortcuts'
                             aria-label='Keyboard Shortcuts'
                             aria-expanded={isShortcutsPopoverOpen}
-                            className='cursor-pointer'
+                            className={HEADER_BUTTON_CLASSNAME}
                         >
                             <Keyboard className='w-5 h-5' />
                         </Button>
@@ -292,15 +296,24 @@ function Header() {
                 </Popover>
 
                 {/* Theme */}
-                <Button 
-                    size='icon-sm' 
-                    variant='outline' 
-                    title='Theme' 
+                <Button
+                    size='icon-sm'
+                    variant='outline'
+                    title='Theme'
                     aria-label='Theme'
-                    className='cursor-pointer'
+                    className={HEADER_BUTTON_CLASSNAME}
                     onClick={handleDarkModeToggle}
                 >
-                    <Moon className='w-5 h-5' />
+                    {/* Icon shows the action a click will take, matching SettingsSheet's
+                        theme toggle: Sun (switch to light) while dark, Moon while light. */}
+                    <IconCrossfade
+                        activeKey={theme}
+                        className="size-5"
+                        icons={{
+                            dark: <Sun className='w-5 h-5' />,
+                            light: <Moon className='w-5 h-5' />
+                        }}
+                    />
                 </Button>
 
                 {/* Settings */}
@@ -310,7 +323,7 @@ function Header() {
                     title='Settings' 
                     aria-label='Settings' 
                     aria-expanded={isSettingsModalOpen}
-                    className='cursor-pointer'
+                    className={HEADER_BUTTON_CLASSNAME}
                     onClick={handleSettings}
                 >
                     <Settings className='w-5 h-5' />

@@ -109,7 +109,7 @@ function ApiLimitPopover({ isOpen }: ApiLimitPopoverProps) {
                     </div>
 
                     <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-                        <span>{usedPercent.toFixed(1)}% used</span>
+                        <span className="tabular-nums">{usedPercent.toFixed(1)}% used</span>
                         <span>{formatNumber(remaining)} remaining</span>
                     </div>
                 </div>

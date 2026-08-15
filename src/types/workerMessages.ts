@@ -131,6 +131,13 @@ export type WorkerRequest =
         logId: SalesforceLogId;
     }
     | {
+        type: 'MARK_LOG_READ';
+        requestId?: RequestId;
+        orgId: SalesforceOrgId;
+        logId: SalesforceLogId;
+        readAt: string;
+    }
+    | {
         type: 'SET_LIVE_POLLING';
         requestId?: RequestId;
         orgId: SalesforceOrgId;

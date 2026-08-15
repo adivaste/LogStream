@@ -33,6 +33,10 @@ export type LoadOlderLogsParams = {
     afterStartTime?: string;
 }
 
+export type UseLiveLogsResult = UseLiveLogsState & {
+    loadOlderLogs: (_params: LoadOlderLogsParams) => Promise<LoadOlderLogsResult>;
+}
+
 const INITIAL_LIVE_LOGS_STATE: UseLiveLogsState = {
     logs: [],
     isLoading: false,
@@ -127,6 +131,11 @@ export const useLiveLogs = () => {
 
             if (message.event === 'LIVE_POLLING_STATE_CHANGED') {
                 setLivePollingState(message.state);
+                return;
+            }
+
+            if (message.event === 'SESSION_EXPIRED') {
+                setLivePollingState('session_expired');
             }
         };
 
@@ -203,7 +212,11 @@ export const useLiveLogs = () => {
                 });
 
                 if (isConnected) {
-                    setLivePollingState('offline');
+                    setLivePollingState(
+                        response.code === 'NO_SESSION' || response.code === 'INVALID_SESSION'
+                            ? 'session_expired'
+                            : 'offline'
+                    );
                 }
 
                 return;
@@ -257,62 +270,96 @@ export const useLiveLogs = () => {
         }));
 
         try {
-            const response = await sendWorkerRequest({
-                type: 'GET_OLDER_LOGS',
-                orgId,
-                beforeStartTime,
-                afterStartTime,
-                limit: LIVE_LOG_PAGE_LIMIT
-            });
+            let cursorBeforeStartTime = beforeStartTime;
+            let totalLoadedCount = 0;
 
-            if (response.type === 'LOGS') {
-                let loadedLogCount = 0;
+            // Salesforce ApexLog.StartTime only has second-level precision, so a
+            // busy org can have far more than one page of logs sharing the exact
+            // boundary timestamp. A full page can legitimately come back with zero
+            // *new* records (we already have them all) even though older history
+            // still exists - that must not be reported as "no older logs found".
+            // Keep paging past all-duplicate full pages until we find new records
+            // or Salesforce returns a page shorter than the limit (true end).
+            for (let attempt = 0; attempt < 10; attempt++) {
+                const response = await sendWorkerRequest({
+                    type: 'GET_OLDER_LOGS',
+                    orgId,
+                    beforeStartTime: cursorBeforeStartTime,
+                    afterStartTime,
+                    limit: LIVE_LOG_PAGE_LIMIT
+                });
+
+                if (response.type !== 'LOGS') {
+                    if (response.type === 'ERROR') {
+                        setState(previousState => ({
+                            ...previousState,
+                            isLoadingOlderLogs: false,
+                            olderLogsErrorMessage: response.message
+                        }));
+                        return {
+                            status: 'failed',
+                            message: response.message
+                        } satisfies LoadOlderLogsResult;
+                    }
+
+                    const message = 'Unexpected worker response while loading older logs.';
+
+                    setState(previousState => ({
+                        ...previousState,
+                        isLoadingOlderLogs: false,
+                        olderLogsErrorMessage: message
+                    }));
+
+                    return {
+                        status: 'failed',
+                        message
+                    } satisfies LoadOlderLogsResult;
+                }
+
+                const fetchedLogs = response.page.logs;
+                const isFullPage = fetchedLogs.length === LIVE_LOG_PAGE_LIMIT;
+                let newLogCount = 0;
 
                 setState(previousState => {
                     const knownLogIds = new Set(previousState.logs.map(log => log.id));
-                    const olderLogs = response.page.logs
+                    const olderLogs = fetchedLogs
                         .map(mapSalesforceLogToUiLog)
                         .filter(log => !knownLogIds.has(log.id));
-                    loadedLogCount = olderLogs.length;
+                    newLogCount = olderLogs.length;
 
                     return {
                         ...previousState,
                         logs: [...previousState.logs, ...olderLogs],
                         isLoadingOlderLogs: false,
-                        hasOlderLogs: response.page.logs.length === LIVE_LOG_PAGE_LIMIT,
+                        hasOlderLogs: isFullPage,
                         olderLogsErrorMessage: null
                     };
                 });
 
-                return loadedLogCount > 0
-                    ? { status: 'loaded', count: loadedLogCount } satisfies LoadOlderLogsResult
-                    : { status: 'empty' } satisfies LoadOlderLogsResult;
-            }
+                totalLoadedCount += newLogCount;
 
-            if (response.type === 'ERROR') {
+                if (newLogCount > 0 || !isFullPage) {
+                    return totalLoadedCount > 0
+                        ? { status: 'loaded', count: totalLoadedCount } satisfies LoadOlderLogsResult
+                        : { status: 'empty' } satisfies LoadOlderLogsResult;
+                }
+
+                const oldestFetchedStartTime = fetchedLogs.at(-1)?.startTime;
+
+                if (!oldestFetchedStartTime) {
+                    return { status: 'empty' } satisfies LoadOlderLogsResult;
+                }
+
+                // Every record in this full page was already known - shift the
+                // window past it and try again rather than giving up.
+                cursorBeforeStartTime = oldestFetchedStartTime;
                 setState(previousState => ({
                     ...previousState,
-                    isLoadingOlderLogs: false,
-                    olderLogsErrorMessage: response.message
+                    isLoadingOlderLogs: true
                 }));
-                return {
-                    status: 'failed',
-                    message: response.message
-                } satisfies LoadOlderLogsResult;
             }
 
-            const message = 'Unexpected worker response while loading older logs.';
-
-            setState(previousState => ({
-                ...previousState,
-                isLoadingOlderLogs: false,
-                olderLogsErrorMessage: message
-            }));
-
-            return {
-                status: 'failed',
-                message
-            } satisfies LoadOlderLogsResult;
+            return { status: 'empty' } satisfies LoadOlderLogsResult;
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : 'Failed to load older logs.';
 

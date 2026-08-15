@@ -1,5 +1,6 @@
 import React from "react";
-import { Search, X } from "lucide-react";
+import { Search } from "lucide-react";
+import { Button } from "@/components/ui/button"
 import {
     Combobox,
     ComboboxContent,
@@ -13,6 +14,7 @@ import {
     PopoverContent,
     PopoverTrigger,
 } from "@/components/ui/popover"
+import { parseSizeBytes } from "@/lib/logListConfig";
 import { formatCompactDate, formatDateInput, formatTime } from "@/lib/utils";
 import { useTableUIStore } from "@/store/tableUIStore";
 import type { LogEntry } from "@/types/ui";
@@ -20,6 +22,20 @@ import type { LogEntry } from "@/types/ui";
 type UserFilterOption = {
     id: string;
     name: string;
+}
+
+type SizeUnit = 'b' | 'kb' | 'mb';
+
+const formatSizeBytes = (bytes: number) => {
+    if (bytes >= 1024 * 1024) {
+        return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+    }
+
+    if (bytes >= 1024) {
+        return `${(bytes / 1024).toFixed(1)}KB`;
+    }
+
+    return `${bytes}B`;
 }
 
 type LogFilterBarProps = {
@@ -36,16 +52,47 @@ function LogFilterBar({
     const selectedUser = useTableUIStore(state => state.selectedUser);
     const startTime = useTableUIStore(state => state.startTime);
     const endTime = useTableUIStore(state => state.endTime);
+    const minSizeBytes = useTableUIStore(state => state.minSizeBytes);
+    const maxSizeBytes = useTableUIStore(state => state.maxSizeBytes);
     const searchQuery = useTableUIStore(state => state.searchQuery);
 
     // Filter actions
     const setSelectedUser = useTableUIStore(state => state.setSelectedUser);
     const setTimeRange = useTableUIStore(state => state.setTimeRange);
+    const setSizeRange = useTableUIStore(state => state.setSizeRange);
     const setSearchQuery = useTableUIStore(state => state.setSearchQuery);
     const clearFilters = useTableUIStore(state => state.clearFilters);
     const isDefaultFilterRange = useTableUIStore(state => state.isDefaultFilterRange);
 
     const hasActiveFilters = Boolean(searchQuery.trim() || selectedUser || !isDefaultFilterRange());
+    const [isTimeRangePopoverOpen, setTimeRangePopoverOpen] = React.useState(false);
+    const [isSizeRangePopoverOpen, setSizeRangePopoverOpen] = React.useState(false);
+    const isSameDayRange = formatDateInput(startTime) === formatDateInput(endTime);
+
+    // Size filter inputs are entered in a friendly unit (independent per
+    // field) and converted to bytes on change - the store only ever holds
+    // bytes, matching how sorting/filtering already work internally.
+    const [minSizeValue, setMinSizeValue] = React.useState('');
+    const [minSizeUnit, setMinSizeUnit] = React.useState<SizeUnit>('kb');
+    const [maxSizeValue, setMaxSizeValue] = React.useState('');
+    const [maxSizeUnit, setMaxSizeUnit] = React.useState<SizeUnit>('kb');
+    const hasSizeFilter = minSizeBytes !== null || maxSizeBytes !== null;
+
+    const sizeRangeLabel = React.useMemo(() => {
+        if (minSizeBytes !== null && maxSizeBytes !== null) {
+            return `${formatSizeBytes(minSizeBytes)} - ${formatSizeBytes(maxSizeBytes)}`;
+        }
+
+        if (minSizeBytes !== null) {
+            return `≥ ${formatSizeBytes(minSizeBytes)}`;
+        }
+
+        if (maxSizeBytes !== null) {
+            return `≤ ${formatSizeBytes(maxSizeBytes)}`;
+        }
+
+        return 'Any size';
+    }, [maxSizeBytes, minSizeBytes]);
 
     const users = React.useMemo<UserFilterOption[]>(() => {
         const uniqueUsers = new Set(logs.map(log => log.user).filter(Boolean));
@@ -57,6 +104,21 @@ function LogFilterBar({
                 name: user
             }));
     }, [logs]);
+
+    // Keeps the popover's local input text in sync when filters are cleared
+    // from elsewhere (e.g. the "Clear All" button), which resets the store
+    // directly without going through these local input handlers.
+    React.useEffect(() => {
+        if (minSizeBytes === null) {
+            setMinSizeValue('');
+        }
+    }, [minSizeBytes]);
+
+    React.useEffect(() => {
+        if (maxSizeBytes === null) {
+            setMaxSizeValue('');
+        }
+    }, [maxSizeBytes]);
 
     // Event Handlers
     const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -78,6 +140,38 @@ function LogFilterBar({
             setTimeRange(startTime, newEndTime);
         }
     }
+    const handleSizeChange = (
+        type: "min" | "max",
+        value: string,
+        unit: SizeUnit
+    ) => {
+        const bytes = value.trim() === '' ? null : parseSizeBytes(`${value}${unit}`);
+
+        if (type === "min") {
+            setMinSizeValue(value);
+            setSizeRange(bytes, maxSizeBytes);
+        } else {
+            setMaxSizeValue(value);
+            setSizeRange(minSizeBytes, bytes);
+        }
+    }
+
+    const handleSizeUnitChange = (type: "min" | "max", unit: SizeUnit) => {
+        if (type === "min") {
+            setMinSizeUnit(unit);
+            setSizeRange(minSizeValue.trim() === '' ? null : parseSizeBytes(`${minSizeValue}${unit}`), maxSizeBytes);
+        } else {
+            setMaxSizeUnit(unit);
+            setSizeRange(minSizeBytes, maxSizeValue.trim() === '' ? null : parseSizeBytes(`${maxSizeValue}${unit}`));
+        }
+    }
+
+    const handleClearSizeRange = () => {
+        setMinSizeValue('');
+        setMaxSizeValue('');
+        setSizeRange(null, null);
+    }
+
     const handleTimeChange = (type: "start" | "end", value: string) => {
         const [hours = 0, minutes = 0] = value.split(":").map(Number);
 
@@ -99,12 +193,11 @@ function LogFilterBar({
             
             {/* Search Bar */}
             <div className='
-                flex items-center gap-2 border border-input px-2 h-9 rounded-md w-full max-w-md bg-input/30 shadow-xs transition-[color,box-shadow]
-                focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 font-sans'
+                flex items-center gap-2 border-0 px-2 h-9 rounded-md w-full max-w-md bg-input/80 shadow-xs transition-[color,box-shadow]
+                focus-within:ring-[3px] focus-within:ring-ring/50 font-sans'
             >
                 <Search className='text-muted-foreground' size={16} />
                 <input
-                    autoFocus
                     type="text"
                     value={searchQuery}
                     placeholder="Search logs..."
@@ -116,18 +209,23 @@ function LogFilterBar({
 
             
             {/* Time Picker */}
-            <Popover>
-                
+            <Popover open={isTimeRangePopoverOpen} onOpenChange={setTimeRangePopoverOpen}>
+
                 {/* PopOver Trigger */}
                 <PopoverTrigger
                     aria-label="Select time range"
-                    className="bg-input/30 border border-input text-sm px-2.5 h-9 rounded-md cursor-pointer flex items-center justify-center gap-1.5 text-foreground shadow-xs hover:bg-input/40 transition-[color,box-shadow,background-color] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 font-sans"
+                    aria-expanded={isTimeRangePopoverOpen}
+                    className="bg-input/80 border-0 text-sm px-2.5 h-9 rounded-md cursor-pointer flex items-center justify-center gap-1.5 text-foreground shadow-xs hover:bg-input/90 transition-[color,box-shadow,background-color] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 font-sans"
                 >
                     <span className="text-muted-foreground">From</span>
                     <span className="font-medium">{formatCompactDate(startTime)}</span>
                     <span className="tabular-nums font-medium">{formatTime(startTime)}</span>
                     <span className="text-muted-foreground">-</span>
-                    <span className="font-medium">{formatCompactDate(endTime)}</span>
+                    {/* Same day: the date above already gives the context - a second,
+                        identical date here would just be redundant. */}
+                    {!isSameDayRange && (
+                        <span className="font-medium">{formatCompactDate(endTime)}</span>
+                    )}
                     <span className="tabular-nums font-medium">{formatTime(endTime)}</span>
                 </PopoverTrigger>
 
@@ -149,14 +247,14 @@ function LogFilterBar({
                                 <input
                                     type="date"
                                     aria-label="Start date"
-                                    className="h-8 w-32 border border-input rounded-md px-2 text-sm bg-background shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                                    className="h-8 w-32 border-0 rounded-md px-2 text-sm bg-background shadow-xs outline-none transition-[color,box-shadow] focus-visible:ring-[3px] focus-visible:ring-ring/50"
                                     value={formatDateInput(startTime)}
                                     onChange={(e) => handleDateChange("start", e.target.value)}
                                 />
                                 <input
                                     type="time"
                                     aria-label="Start time"
-                                    className="h-8 w-24 border border-input rounded-md px-2 text-sm bg-background shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 [&::-webkit-calendar-picker-indicator]:hidden [&::-webkit-calendar-picker-indicator]:appearance-none"
+                                    className="h-8 w-24 border-0 rounded-md px-2 text-sm bg-background shadow-xs outline-none transition-[color,box-shadow] focus-visible:ring-[3px] focus-visible:ring-ring/50 [&::-webkit-calendar-picker-indicator]:hidden [&::-webkit-calendar-picker-indicator]:appearance-none"
                                     value={formatTime(startTime)}
                                     onChange={(e) => handleTimeChange("start", e.target.value)}
                                 />
@@ -172,14 +270,14 @@ function LogFilterBar({
                                 <input
                                     type="date"
                                     aria-label="End date"
-                                    className="h-8 w-32 border border-input rounded-md px-2 text-sm bg-background shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                                    className="h-8 w-32 border-0 rounded-md px-2 text-sm bg-background shadow-xs outline-none transition-[color,box-shadow] focus-visible:ring-[3px] focus-visible:ring-ring/50"
                                     value={formatDateInput(endTime)}
                                     onChange={(e) => handleDateChange("end", e.target.value)}
                                 />
                                 <input
                                     type="time"
                                     aria-label="End time"
-                                    className="h-8 w-24 border border-input rounded-md px-2 text-sm bg-background shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 [&::-webkit-calendar-picker-indicator]:hidden [&::-webkit-calendar-picker-indicator]:appearance-none"
+                                    className="h-8 w-24 border-0 rounded-md px-2 text-sm bg-background shadow-xs outline-none transition-[color,box-shadow] focus-visible:ring-[3px] focus-visible:ring-ring/50 [&::-webkit-calendar-picker-indicator]:hidden [&::-webkit-calendar-picker-indicator]:appearance-none"
                                     value={formatTime(endTime)}
                                     onChange={(e) => handleTimeChange("end", e.target.value)}
                                 />
@@ -187,6 +285,107 @@ function LogFilterBar({
                         </div>
 
                     </div>
+                </PopoverContent>
+            </Popover>
+
+            {/* Size Filter */}
+            <Popover open={isSizeRangePopoverOpen} onOpenChange={setSizeRangePopoverOpen}>
+
+                {/* PopOver Trigger */}
+                <PopoverTrigger
+                    aria-label="Select log size range"
+                    aria-expanded={isSizeRangePopoverOpen}
+                    className={`
+                        bg-input/80 border-0 text-sm px-2.5 h-9 rounded-md cursor-pointer flex items-center
+                        justify-center gap-1.5 shadow-xs hover:bg-input/90 transition-[color,box-shadow,background-color]
+                        outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 font-sans
+                        ${hasSizeFilter ? 'text-foreground' : 'text-muted-foreground'}
+                    `}
+                >
+                    <span className="text-muted-foreground">Size</span>
+                    <span className="font-medium tabular-nums">{sizeRangeLabel}</span>
+                </PopoverTrigger>
+
+                {/* PopOver Content */}
+                <PopoverContent className="w-auto bg-popover border border-border shadow-lg px-3 py-3 font-sans">
+
+                    <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-3 inline-block font-sans">
+                        Filter by Log Size
+                    </label>
+
+                    <div className="grid grid-cols-2 gap-3">
+
+                        {/* Min Size */}
+                        <div>
+                            <label className="block text-xs font-medium text-muted-foreground mb-1 font-sans">
+                                Min
+                            </label>
+                            <div className="flex items-center gap-1.5">
+                                <input
+                                    type="number"
+                                    min="0"
+                                    step="0.1"
+                                    aria-label="Minimum log size"
+                                    placeholder="0"
+                                    className="h-8 w-20 border-0 rounded-md px-2 text-sm bg-background shadow-xs outline-none transition-[color,box-shadow] focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                                    value={minSizeValue}
+                                    onChange={(e) => handleSizeChange("min", e.target.value, minSizeUnit)}
+                                />
+                                <select
+                                    aria-label="Minimum log size unit"
+                                    className="h-8 rounded-md border-0 bg-background px-1.5 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                                    value={minSizeUnit}
+                                    onChange={(e) => handleSizeUnitChange("min", e.target.value as SizeUnit)}
+                                >
+                                    <option value="b">B</option>
+                                    <option value="kb">KB</option>
+                                    <option value="mb">MB</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        {/* Max Size */}
+                        <div>
+                            <label className="block text-xs font-medium text-muted-foreground mb-1 font-sans">
+                                Max
+                            </label>
+                            <div className="flex items-center gap-1.5">
+                                <input
+                                    type="number"
+                                    min="0"
+                                    step="0.1"
+                                    aria-label="Maximum log size"
+                                    placeholder="Any"
+                                    className="h-8 w-20 border-0 rounded-md px-2 text-sm bg-background shadow-xs outline-none transition-[color,box-shadow] focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                                    value={maxSizeValue}
+                                    onChange={(e) => handleSizeChange("max", e.target.value, maxSizeUnit)}
+                                />
+                                <select
+                                    aria-label="Maximum log size unit"
+                                    className="h-8 rounded-md border-0 bg-background px-1.5 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                                    value={maxSizeUnit}
+                                    onChange={(e) => handleSizeUnitChange("max", e.target.value as SizeUnit)}
+                                >
+                                    <option value="b">B</option>
+                                    <option value="kb">KB</option>
+                                    <option value="mb">MB</option>
+                                </select>
+                            </div>
+                        </div>
+
+                    </div>
+
+                    {hasSizeFilter && (
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={handleClearSizeRange}
+                            className="mt-3 w-full text-muted-foreground hover:text-foreground"
+                        >
+                            Clear size filter
+                        </Button>
+                    )}
                 </PopoverContent>
             </Popover>
 
@@ -198,10 +397,10 @@ function LogFilterBar({
                 onValueChange={handleUserChange}
                 autoHighlight
             >
-                <ComboboxInput 
-                    placeholder="Select a user" 
-                    className="bg-input/30 dark:bg-input/30 h-9 text-sm text-foreground placeholder:text-muted-foreground font-sans"
-                    showClear
+                <ComboboxInput
+                    placeholder="Select a user"
+                    className="w-48 max-w-48 bg-input/80 dark:bg-input/80 border-0 h-9 text-sm text-foreground placeholder:text-muted-foreground font-sans"
+                    showClear={Boolean(selectedUser)}
                 />
                 <ComboboxContent >
                     <ComboboxEmpty>No user found.</ComboboxEmpty>
@@ -216,22 +415,16 @@ function LogFilterBar({
             </Combobox>
 
             {/* Clear Filters */}
-            <button
+            <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 disabled={!hasActiveFilters}
-                aria-label="Clear filters"
-                title="Clear filters"
-                className="
-                    flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-input bg-input/30
-                    text-muted-foreground shadow-xs transition-[color,box-shadow,background-color]
-                    hover:bg-input/40 hover:text-foreground
-                    focus-visible:border-ring focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50
-                    disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-input/30 disabled:hover:text-muted-foreground
-                "
                 onClick={clearFilters}
+                className="shrink-0 font-sans text-muted-foreground hover:text-foreground"
             >
-                <X size={16} />
-            </button>
+                Clear All
+            </Button>
 
             {/* Search/Filter Result Count */}
             <div
@@ -239,7 +432,7 @@ function LogFilterBar({
                 className="text-sm text-muted-foreground ml-auto font-sans"
             > 
                 Showing 
-                <span className="font-medium text-foreground mx-1">{filteredLogCount.toLocaleString()}</span>
+                <span className="font-medium tabular-nums text-foreground mx-1">{filteredLogCount.toLocaleString()}</span>
                 from
                 <span className="font-medium"> {logs.length.toLocaleString()} logs</span>
             </div>

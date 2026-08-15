@@ -1,20 +1,24 @@
 import {
     type VirtualItem,
-    useWindowVirtualizer
+    useVirtualizer
 } from "@tanstack/react-virtual";
-import { AlertCircle, ArrowDown, ArrowUp, Loader2 } from "lucide-react";
+import { AlertCircle, ArrowDown, ArrowUp, Loader2, SearchX } from "lucide-react";
 import React from "react";
+import { toast } from "sonner";
+import { EmptyState } from "@/components/ui/empty-state";
 import {
     LOG_ROW_HEIGHT,
     LOG_TABLE_COLUMNS,
     LOG_TABLE_GRID_TEMPLATE_COLUMNS,
     LOG_VIRTUAL_SCROLL_MARGIN,
+    NUMERIC_LOG_COLUMNS,
     sortLogs,
     getNextLogIndex,
     formatLogDuration,
     filterLogs
 } from "@/lib/logListConfig";
-import { useLiveLogs } from "@/hooks/useLiveLogs";
+import type { UseLiveLogsResult } from "@/hooks/useLiveLogs";
+import { useElementScrollEdges } from "@/hooks/useScrollEdgeFade";
 import { useTableUIStore } from "@/store/tableUIStore";
 import { type LogEntry, SortBy, SortDirection } from "@/types/ui";
 import { LogFilterBar } from "./LogFilterBar";
@@ -22,7 +26,8 @@ import { LogFilterBar } from "./LogFilterBar";
 type LogGridHeaderProps = {
     sortBy: SortBy;
     sortDirection: SortDirection;
-    onSort: (_event: React.MouseEvent<HTMLDivElement>) => void;
+    onSort: (_event: React.MouseEvent<HTMLDivElement> | React.KeyboardEvent<HTMLDivElement>) => void;
+    showScrolledShadow: boolean;
 }
 
 type LogRowProps = {
@@ -34,35 +39,57 @@ type LogRowProps = {
     onSelect: (_log: LogEntry) => void;
 }
 
-type HistoryNotice = {
-    tone: 'info' | 'error';
-    message: string;
-}
-
 const LogGridHeader = React.memo(function LogGridHeader({
     sortBy,
     sortDirection,
-    onSort
+    onSort,
+    showScrolledShadow
 }: LogGridHeaderProps) {
     return (
         <div
             role="row"
-            className="grid border-y border-border py-1 px-8 bg-card sticky top-13 z-10"
+            className="relative grid gap-4 border-y border-border py-1 px-8 bg-card sticky top-13 z-10"
             style={{ gridTemplateColumns: LOG_TABLE_GRID_TEMPLATE_COLUMNS }}
         >
+            {/* The header is opaque, so this isn't for revealing cut-off text (see
+                LogBodyViewer's fade) - it's a drop-shadow cue that rows are now
+                scrolled behind the sticky header, shown only once you've scrolled. */}
+            <div
+                aria-hidden="true"
+                className={`
+                    pointer-events-none absolute inset-x-0 -bottom-4 h-4
+                    bg-gradient-to-b from-black/10 dark:from-black/40 to-transparent
+                    transition-opacity duration-150
+                    ${showScrolledShadow ? 'opacity-100' : 'opacity-0'}
+                `}
+            />
+
             {LOG_TABLE_COLUMNS.map((column) => (
                 <div
                     key={column}
                     role="columnheader"
+                    aria-sort={
+                        sortBy !== column
+                            ? 'none'
+                            : sortDirection === SortDirection.ASC ? 'ascending' : 'descending'
+                    }
                     data-column={column}
+                    tabIndex={0}
                     onClick={onSort}
-                    className="
+                    onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            onSort(event);
+                        }
+                    }}
+                    className={`
                         text-sans text-xs font-medium uppercase tracking-wider
                         dark:text-neutral-400 py-1 px-2 cursor-pointer rounded
                         focus-visible:ring-emerald-400/70 focus-visible:outline-none
                         focus-visible:ring-1 focus-visible:ring-inset flex items-center
                         font-sans
-                    "
+                        ${NUMERIC_LOG_COLUMNS.has(column) ? 'justify-end text-right' : ''}
+                    `}
                 >
                     {column.charAt(0).toUpperCase() + column.slice(1)}
 
@@ -115,19 +142,19 @@ const LogRow = React.memo(function LogRow({
                 gridTemplateColumns: LOG_TABLE_GRID_TEMPLATE_COLUMNS
             }}
         >
-            <div role="gridcell" className="relative min-w-0 truncate rounded px-2 py-px text-sm text-primary" title={log.operation}>
-                {!readAt && (
-                    <span
-                        aria-label="Unread log"
-                        className="absolute -left-4 top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full bg-emerald-400"
-                    />
-                )}
+            {!readAt && (
+                <span
+                    aria-label="Unread log"
+                    className="absolute left-3 top-1/2 size-2 -translate-y-1/2 rounded-full bg-emerald-400"
+                />
+            )}
+            <div role="gridcell" className="min-w-0 truncate rounded px-2 py-px text-sm text-primary" title={log.operation}>
                 {log.operation}
             </div>
             <div role="gridcell" className="min-w-0 truncate text-sm text-primary" title={log.user}>{log.user}</div>
             <div role="gridcell" className="min-w-0 truncate text-sm text-primary" title={log.app}>{log.app}</div>
-            <div role="gridcell" className="min-w-0 truncate font-mono text-sm text-primary/70 dark:text-primary/50" title={log.size}>{log.size}</div>
-            <div role="gridcell" className="min-w-0">
+            <div role="gridcell" className="min-w-0 truncate text-right font-mono text-sm text-primary/70 dark:text-primary/50" title={log.size}>{log.size}</div>
+            <div role="gridcell" className="flex min-w-0 justify-end">
                 <span
                     className="block w-fit max-w-full truncate rounded bg-muted px-2 py-px font-mono text-sm text-muted-foreground"
                     title={log.duration}
@@ -140,78 +167,23 @@ const LogRow = React.memo(function LogRow({
     );
 });
 
-const HistoryNoticeToast = React.memo(function HistoryNoticeToast({
-    notice,
-    isLoading
-}: {
-    notice: HistoryNotice | null;
-    isLoading: boolean;
-}) {
-    const message = isLoading
-        ? 'Loading older logs...'
-        : notice?.message;
-    const tone = notice?.tone ?? 'info';
+type LogListProps = UseLiveLogsResult & {
+    // The main content area (Insights + LogList) shares one Base UI ScrollArea
+    // owned by App.tsx, so its virtualizer scrolls that element instead of
+    // the window - see the layout notes near the bottom fade below.
+    scrollElementRef: React.RefObject<HTMLDivElement | null>;
+}
 
-    if (!message) {
-        return null;
-    }
+function LogList({
+    logs,
+    isLoading,
+    isLoadingOlderLogs,
+    errorMessage,
+    loadOlderLogs,
+    scrollElementRef
+}: LogListProps) {
 
-    return (
-        <div
-            role="status"
-            aria-live="polite"
-            className={`
-                fixed bottom-4 right-4 z-50 flex max-w-xs items-center gap-2 rounded-lg border
-                bg-background/95 px-3 py-2 text-xs shadow-xl backdrop-blur font-sans
-                ${tone === 'error'
-            ? 'border-destructive/25 text-destructive'
-            : 'border-border text-muted-foreground'}
-            `}
-        >
-            {isLoading ? (
-                <Loader2 size={14} className="shrink-0 animate-spin text-emerald-500" />
-            ) : tone === 'error' ? (
-                <AlertCircle size={14} className="shrink-0" />
-            ) : (
-                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
-            )}
-            <span className="truncate">{message}</span>
-        </div>
-    );
-});
-
-function LogList() {
-    const {
-        logs,
-        isLoading,
-        isLoadingOlderLogs,
-        errorMessage,
-        loadOlderLogs
-    } = useLiveLogs();
-
-    const [historyNotice, setHistoryNotice] = React.useState<HistoryNotice | null>(null);
-
-    const historyNoticeTimeoutRef = React.useRef<number | null>(null);
     const lastOlderLoadAttemptKeyRef = React.useRef<string | null>(null);
-
-    const showHistoryNotice = React.useCallback((
-        message: string,
-        tone: HistoryNotice['tone'] = 'info'
-    ) => {
-        if (historyNoticeTimeoutRef.current) {
-            window.clearTimeout(historyNoticeTimeoutRef.current);
-        }
-
-        setHistoryNotice({
-            tone,
-            message
-        });
-
-        historyNoticeTimeoutRef.current = window.setTimeout(() => {
-            setHistoryNotice(null);
-            historyNoticeTimeoutRef.current = null;
-        }, 2600);
-    }, []);
 
     // Store state
     const sortBy: SortBy = useTableUIStore(state => state.sortBy);
@@ -220,6 +192,8 @@ function LogList() {
     const selectedUser = useTableUIStore(state => state.selectedUser);
     const startTime = useTableUIStore(state => state.startTime);
     const endTime = useTableUIStore(state => state.endTime);
+    const minSizeBytes = useTableUIStore(state => state.minSizeBytes);
+    const maxSizeBytes = useTableUIStore(state => state.maxSizeBytes);
     const isLogPanelOpen = useTableUIStore(state => state.isLogPanelOpen);
 
     // Store actions
@@ -239,9 +213,11 @@ function LogList() {
             searchQuery,
             selectedUser,
             startTime,
-            endTime
+            endTime,
+            minSizeBytes,
+            maxSizeBytes
         });
-    }, [endTime, logs, searchQuery, selectedUser, startTime]);
+    }, [endTime, logs, maxSizeBytes, minSizeBytes, searchQuery, selectedUser, startTime]);
 
     const sortedLogs = React.useMemo(() => {
         return sortLogs(filteredLogs, sortBy, sortDirection);
@@ -251,9 +227,12 @@ function LogList() {
         return new Map(sortedLogs.map((log, index) => [log.id, index]));
     }, [sortedLogs]);
 
+    const scrollEdges = useElementScrollEdges(scrollElementRef);
+
     // Virtualization
-    const rowVirtualizer = useWindowVirtualizer({
+    const rowVirtualizer = useVirtualizer({
         count: sortedLogs.length,
+        getScrollElement: () => scrollElementRef.current,
         estimateSize: () => LOG_ROW_HEIGHT,
         overscan: 12,
         scrollMargin: LOG_VIRTUAL_SCROLL_MARGIN
@@ -337,10 +316,6 @@ function LogList() {
             return;
         }
 
-        if (sortBy !== SortBy.TIMESTAMP || sortDirection !== SortDirection.DESC) {
-            return;
-        }
-
         const lastVirtualRow = virtualRows
             .filter(virtualRow => virtualRow.index < sortedLogs.length)
             .at(-1);
@@ -349,7 +324,27 @@ function LogList() {
             return;
         }
 
-        if (lastVirtualRow.index >= sortedLogs.length - 8) {
+        if (lastVirtualRow.index < sortedLogs.length - 8) {
+            return;
+        }
+
+        if (sortBy !== SortBy.TIMESTAMP || sortDirection !== SortDirection.DESC) {
+            // Loading older history only makes sense in newest-first timestamp order —
+            // "oldest visible row" isn't meaningful under any other sort. Tell the user
+            // instead of silently doing nothing when they hit the bottom.
+            const attemptKey = `unsupported-sort:${sortBy}:${sortDirection}`;
+
+            if (lastOlderLoadAttemptKeyRef.current !== attemptKey) {
+                lastOlderLoadAttemptKeyRef.current = attemptKey;
+                toast.info('Sort by Timestamp (newest first) to load older logs.', {
+                    id: 'unsupported-sort-history-load'
+                });
+            }
+
+            return;
+        }
+
+        {
             const oldestVisibleLog = sortedLogs.at(-1);
 
             if (!oldestVisibleLog?.startTime) {
@@ -371,16 +366,22 @@ function LogList() {
 
             lastOlderLoadAttemptKeyRef.current = attemptKey;
 
+            const toastId = toast.loading('Loading older logs...');
+
             void loadOlderLogs({
                 beforeStartTime: oldestVisibleLog.startTime,
                 afterStartTime: startTime.toISOString()
             }).then(result => {
-                if (result.status === 'empty') {
-                    showHistoryNotice('No older logs found.');
-                }
-
-                if (result.status === 'failed') {
-                    showHistoryNotice(result.message, 'error');
+                if (result.status === 'loaded') {
+                    toast.success(`Loaded ${result.count} older log${result.count === 1 ? '' : 's'}.`, {
+                        id: toastId
+                    });
+                } else if (result.status === 'empty') {
+                    toast.info('No older logs found.', { id: toastId });
+                } else if (result.status === 'failed') {
+                    toast.error(result.message, { id: toastId });
+                } else {
+                    toast.dismiss(toastId);
                 }
             });
         }
@@ -391,7 +392,6 @@ function LogList() {
         loadOlderLogs,
         searchQuery,
         selectedUser,
-        showHistoryNotice,
         sortBy,
         sortDirection,
         startTime,
@@ -399,14 +399,6 @@ function LogList() {
         sortedLogs.length,
         virtualRows
     ]);
-
-    React.useEffect(() => {
-        return () => {
-            if (historyNoticeTimeoutRef.current) {
-                window.clearTimeout(historyNoticeTimeoutRef.current);
-            }
-        };
-    }, []);
 
     React.useEffect(() => {
         const wasLogPanelOpen = wasLogPanelOpenRef.current;
@@ -493,33 +485,45 @@ function LogList() {
                     sortBy={sortBy}
                     sortDirection={sortDirection}
                     onSort={handleSort}
+                    showScrolledShadow={!scrollEdges.atTop}
                 />
 
                 <div
                     role="rowgroup"
                     className="relative block"
                     style={{
-                        height: isLoading || errorMessage
-                            ? `${LOG_ROW_HEIGHT * 3}px`
+                        height: isLoading || errorMessage || (logs.length > 0 && sortedLogs.length === 0)
+                            ? '240px'
                             : `${rowVirtualizer.getTotalSize()}px`
                     }}
                 >
                     {isLoading && (
-                        <div className="px-8 py-6 text-sm text-muted-foreground font-sans">
-                            Loading logs from local cache...
-                        </div>
+                        <EmptyState
+                            className="absolute inset-0"
+                            icon={Loader2}
+                            iconClassName="[&_svg]:animate-spin"
+                            title="Loading logs"
+                            description="Reading logs from the local cache..."
+                        />
                     )}
 
                     {errorMessage && (
-                        <div className="px-8 py-6 text-sm text-destructive">
-                            {errorMessage}
-                        </div>
+                        <EmptyState
+                            className="absolute inset-0"
+                            icon={AlertCircle}
+                            tone="destructive"
+                            title="Couldn't load logs"
+                            description={errorMessage}
+                        />
                     )}
 
                     {!isLoading && !errorMessage && logs.length > 0 && sortedLogs.length === 0 && (
-                        <div className="px-8 py-6 text-sm text-muted-foreground font-sans">
-                            No logs match the current filters.
-                        </div>
+                        <EmptyState
+                            className="absolute inset-0"
+                            icon={SearchX}
+                            title="No logs match your filters"
+                            description="Try adjusting the search, user, time range, or size filters."
+                        />
                     )}
 
                     {virtualRows.map((virtualRow) => {
@@ -544,9 +548,17 @@ function LogList() {
                 </div>
             </div>
 
-            <HistoryNoticeToast
-                notice={historyNotice}
-                isLoading={isLoadingOlderLogs}
+            {/* Sticky within the shared scroll viewport (see App.tsx) rather than
+                fixed to the browser viewport - shown only while there are rows
+                cut off below the fold. */}
+            <div
+                aria-hidden="true"
+                className={`
+                    pointer-events-none sticky bottom-0 z-10 -mt-6 h-6
+                    bg-gradient-to-t from-background to-transparent
+                    transition-opacity duration-150
+                    ${scrollEdges.atBottom ? 'opacity-0' : 'opacity-100'}
+                `}
             />
         </section>
     );

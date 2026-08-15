@@ -276,9 +276,24 @@ export const apexLogService = {
             return cachedRecord;
         }
 
-        const body = await salesforceClient.toolingText(
-            `/sobjects/ApexLog/${logId}/Body/`
-        );
+        let body: string;
+
+        try {
+            body = await salesforceClient.toolingText(
+                `/sobjects/ApexLog/${logId}/Body/`
+            );
+        } catch (error) {
+            // Salesforce purges ApexLog bodies once the org's debug log storage
+            // quota is exceeded, but the log's metadata (and this row) can still
+            // be cached locally after that happens. Surface a message the user
+            // can act on instead of the raw Salesforce error code.
+            if (error instanceof Error && error.message.includes('INVALID_CROSS_REFERENCE_KEY')) {
+                throw new Error('This log has been purged from Salesforce and its body is no longer available.');
+            }
+
+            throw error;
+        }
+
         const record: SalesforceLogRecord = {
             orgId: session.orgId,
             logId,
