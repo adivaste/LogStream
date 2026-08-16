@@ -16,7 +16,6 @@ export type LivePollingState =
     | 'syncing'
     | 'idle_paused'
     | 'manual_paused'
-    | 'api_throttled'
     | 'api_exceeded'
     | 'session_expired'
     | 'offline';
@@ -144,6 +143,11 @@ export type WorkerRequest =
         enabled: boolean;
     }
     | {
+        type: 'SET_LIVE_POLL_INTERVAL_MS';
+        requestId?: RequestId;
+        pollIntervalMs: number;
+    }
+    | {
         type: 'USER_ACTIVITY_HEARTBEAT';
         requestId?: RequestId;
         orgId: SalesforceOrgId;
@@ -183,6 +187,13 @@ export type WorkerResponse =
         type: 'LOGS';
         requestId?: RequestId;
         page: LogPage;
+        // Only ever attached by GET_LOGS (which ticks the live poller before
+        // reading the cache) - GET_OLDER_LOGS has no polling attempt to report.
+        // The cache read below succeeds independently of whether Salesforce
+        // was actually reachable, so without this the caller has no way to
+        // tell a real "live" result apart from "served from cache while the
+        // session was actually dead".
+        livePollingState?: LivePollingState;
     }
     | {
         type: 'LOG_BODY';

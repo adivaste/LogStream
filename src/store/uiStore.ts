@@ -1,12 +1,15 @@
 import { create } from "zustand";
 import {
+    type AppPreferences,
     applyThemePreference,
     initializeThemePreference,
+    persistPollingPreferences,
     persistShowInsightsPreference,
     persistThemePreference,
     readAppPreferences,
     rememberConnectedOrg
 } from "@/lib/appPreferences";
+import { sendWorkerRequest } from "@/services/backgroundBridge";
 import { connectSalesforceOrg } from "@/services/salesforceConnection";
 import type { SalesforceConnectionInfo } from "@/types/salesforce";
 import type { LivePollingState } from "@/types/workerMessages";
@@ -28,6 +31,8 @@ type UIState = {
     // Preferences
     isInsightsVisible: boolean;
     toggleInsightsVisible: () => void;
+    pollingPreferences: AppPreferences['polling'];
+    updatePollingPreferences: (_polling: Partial<AppPreferences['polling']>) => void;
 
     // Salesforce Connection
     connectionInfo: SalesforceConnectionInfo | null;
@@ -73,6 +78,7 @@ export const useUIStore = create<UIState>((set, get) => ({
     // Initial State
     theme: initializeThemePreference(),
     isInsightsVisible: readAppPreferences().preferences.showInsights,
+    pollingPreferences: readAppPreferences().polling,
     connectionInfo: null,
     sessionDetectionState: 'detecting',
     isInitialSessionDetectionComplete: false,
@@ -97,6 +103,21 @@ export const useUIStore = create<UIState>((set, get) => ({
             persistShowInsightsPreference(next);
             return { isInsightsVisible: next };
         });
+    },
+    updatePollingPreferences: (polling) => {
+        const persisted = persistPollingPreferences(polling);
+
+        set({ pollingPreferences: persisted.polling });
+
+        // The poll interval also drives the background service worker's
+        // `chrome.alarms` schedule, which can't read this store or
+        // localStorage - sync it explicitly so both contexts agree.
+        if (typeof polling.pollIntervalMs === 'number') {
+            void sendWorkerRequest({
+                type: 'SET_LIVE_POLL_INTERVAL_MS',
+                pollIntervalMs: polling.pollIntervalMs
+            });
+        }
     },
     setConnectionInfo: (connectionInfo) => {
         rememberConnectedOrg(connectionInfo);

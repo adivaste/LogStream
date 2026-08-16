@@ -6,8 +6,8 @@ import { Button } from "@/components/ui/button";
 import { IconCrossfade } from "@/components/ui/icon-crossfade";
 import { PopoverContent } from "@/components/ui/popover";
 import { useTraceFlagUsers } from "@/hooks/useTraceFlagUsers";
-import { TRACE_FLAG_DURATION_MS } from "@/lib/traceFlagConfig";
 import { cn } from "@/lib/utils";
+import { useUIStore } from "@/store/uiStore";
 import type { SalesforceUserId } from "@/types/salesforce";
 import type { TraceFlagUserSummary } from "@/types/workerMessages";
 
@@ -77,7 +77,7 @@ const TraceFlagUserRow = React.memo(function TraceFlagUserRow({
                 <div className="truncate text-sm font-medium leading-5 text-primary">
                     {summary.user.name}
                 </div>
-                <div className="truncate font-mono text-[11px] leading-4 text-muted-foreground">
+                <div className="truncate text-[11px] leading-4 text-muted-foreground">
                     {summary.user.username}
                 </div>
             </div>
@@ -100,7 +100,7 @@ const TraceFlagUserRow = React.memo(function TraceFlagUserRow({
                     }}
                 />
                 {!isMutating && (
-                    <span className="font-mono">
+                    <span>
                         {summary.hasTraceFlag ? (remainingLabel ?? 'Active') : 'Not set'}
                     </span>
                 )}
@@ -114,6 +114,7 @@ type TraceFlagPopoverProps = {
 }
 
 function TraceFlagPopover({ isOpen }: TraceFlagPopoverProps) {
+    const traceFlagDurationMs = useUIStore(state => state.pollingPreferences.traceFlagDurationMs);
     const [searchQuery, setSearchQuery] = React.useState('');
     const deferredSearchQuery = React.useDeferredValue(searchQuery.trim().toLowerCase());
     const {
@@ -148,7 +149,7 @@ function TraceFlagPopover({ isOpen }: TraceFlagPopoverProps) {
         const isDisabling = summary.hasTraceFlag;
         const expiresAt = isDisabling
             ? new Date(0).toISOString()
-            : new Date(Date.now() + TRACE_FLAG_DURATION_MS).toISOString();
+            : new Date(Date.now() + traceFlagDurationMs).toISOString();
         const toastId = toast.loading(
             isDisabling ? `Disabling trace flag for ${summary.user.name}...` : `Enabling trace flag for ${summary.user.name}...`
         );
@@ -158,7 +159,7 @@ function TraceFlagPopover({ isOpen }: TraceFlagPopoverProps) {
                 toast.success(
                     isDisabling
                         ? `Trace flag disabled for ${summary.user.name}.`
-                        : `Trace flag enabled for ${summary.user.name} (30 min).`,
+                        : `Trace flag enabled for ${summary.user.name} (${Math.round(traceFlagDurationMs / 60_000)} min).`,
                     { id: toastId }
                 );
                 return;
@@ -166,17 +167,13 @@ function TraceFlagPopover({ isOpen }: TraceFlagPopoverProps) {
 
             toast.error(result.message, { id: toastId });
         });
-    }, [setTraceFlag, users]);
+    }, [setTraceFlag, traceFlagDurationMs, users]);
 
     return (
         <PopoverContent
             align="end"
             sideOffset={10}
-            className="
-                w-[22rem] overflow-hidden rounded-lg border-border bg-background p-0 font-sans shadow-xl
-                data-[state=open]:duration-200 data-[state=closed]:duration-150
-                data-[state=open]:ease-[cubic-bezier(.16,1,.3,1)] data-[state=closed]:ease-[cubic-bezier(.7,0,.84,0)]
-            "
+            className="w-[22rem] overflow-hidden rounded-lg border-border bg-background p-0 font-sans shadow-xl"
         >
             <div className="border-b border-border px-3 py-2.5 font-sans">
                 <div className="flex items-center justify-between gap-3">
@@ -216,7 +213,12 @@ function TraceFlagPopover({ isOpen }: TraceFlagPopoverProps) {
                 </label>
             </div>
 
-            <div className="max-h-[22rem] overflow-auto p-1.5 font-sans">
+            {/* min-height keeps the popover's footprint stable across its loading
+                -> populated transition - without it, the panel visibly snapped
+                from a ~4rem "Loading users..." placeholder up to however tall
+                the fetched list turned out to be, right in the middle of the
+                open animation, which read as jank/layout shift. */}
+            <div className="min-h-56 max-h-[22rem] overflow-auto p-1.5 font-sans">
                 {errorMessage ? (
                     <div className="px-3 py-8 text-center text-sm text-muted-foreground">
                         {errorMessage}

@@ -4,6 +4,7 @@ import { syncStateRepository } from "./db/syncStateRepository";
 import { liveLogPoller } from "./poller";
 import { apexLogService } from "./salesforce/apexLogService";
 import { apiLimitService } from "./salesforce/apiLimitService";
+import { SalesforceSessionExpiredError } from "./salesforce/salesforceClient";
 import { traceFlagService } from "./salesforce/traceFlagService";
 import {
     handleSessionRequest,
@@ -12,6 +13,20 @@ import {
 import { sessionStore } from "./session/sessionStore";
 import { handleLocalWorkerRequest } from "@/services/localLogStreamBackend";
 import type { WorkerErrorResponse, WorkerRequest, WorkerResponse } from "@/types/workerMessages";
+
+// Shared across every on-demand (non-poller) Salesforce call below - the
+// poller already handles its own SESSION_EXPIRED broadcast+clear in
+// poller.ts, but a session can just as easily die mid-request for log body
+// fetches, trace flag mutations, or API budget checks. Routing all of them
+// through the same clear+broadcast (and the same friendly message) means
+// every surface shows "reconnect" instead of each leaking its own raw
+// "401: Session expired..." Salesforce error text.
+const SESSION_EXPIRED_MESSAGE = 'Your Salesforce session has expired. Reconnect from the header to continue.';
+
+const handleSessionExpiredError = async (): Promise<void> => {
+    await sessionStore.clear();
+    broadcastWorkerEvent({ event: 'SESSION_EXPIRED' });
+}
 
 const createUnknownErrorResponse = (
     request: WorkerRequest,
@@ -117,7 +132,7 @@ const handleSessionGatedRequest = async (
     }
 
     if (request.type === 'GET_LOGS') {
-        await liveLogPoller.tick();
+        const tickResult = await liveLogPoller.tick();
         const page = await logRepository.getPage(
             request.orgId,
             request.cursor ?? null,
@@ -127,7 +142,8 @@ const handleSessionGatedRequest = async (
         return {
             type: 'LOGS',
             requestId: request.requestId,
-            page
+            page,
+            livePollingState: tickResult.state ?? undefined
         };
     }
 
@@ -184,6 +200,11 @@ const handleSessionGatedRequest = async (
                 }
             };
         } catch (error) {
+            if (error instanceof SalesforceSessionExpiredError) {
+                await handleSessionExpiredError();
+                return createLogBodyErrorResponse(request, new Error(SESSION_EXPIRED_MESSAGE));
+            }
+
             return createLogBodyErrorResponse(request, error);
         }
     }
@@ -245,6 +266,16 @@ export const handleWorkerMessage = async (
     request: WorkerRequest
 ): Promise<WorkerResponse> => {
     try {
+        if (request.type === 'SET_LIVE_POLL_INTERVAL_MS') {
+            await liveLogPoller.setPollIntervalMs(request.pollIntervalMs);
+
+            return {
+                type: 'ACK',
+                requestId: request.requestId,
+                requestType: request.type
+            };
+        }
+
         if (isSessionRequest(request)) {
             return await handleSessionRequest(request);
         }
@@ -255,6 +286,18 @@ export const handleWorkerMessage = async (
 
         return await handleLocalWorkerRequest(request);
     } catch (error) {
+        if (error instanceof SalesforceSessionExpiredError) {
+            await handleSessionExpiredError();
+
+            return {
+                type: 'ERROR',
+                requestId: request.requestId,
+                code: 'INVALID_SESSION',
+                message: SESSION_EXPIRED_MESSAGE,
+                retryable: false
+            };
+        }
+
         return createUnknownErrorResponse(request, error);
     }
 }

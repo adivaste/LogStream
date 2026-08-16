@@ -62,11 +62,7 @@ function ApiLimitPopover({ isOpen }: ApiLimitPopoverProps) {
         <PopoverContent
             align="end"
             sideOffset={10}
-            className="
-                w-[22rem] overflow-hidden rounded-lg border-border bg-background p-0 font-sans shadow-xl
-                data-[state=open]:duration-200 data-[state=closed]:duration-150
-                data-[state=open]:ease-[cubic-bezier(.16,1,.3,1)] data-[state=closed]:ease-[cubic-bezier(.7,0,.84,0)]
-            "
+            className="w-[22rem] overflow-hidden rounded-lg border-border bg-background p-0 font-sans shadow-xl"
         >
             <div className="flex items-center justify-between border-b border-border px-3 py-2.5 font-sans">
                 <div>
@@ -100,11 +96,12 @@ function ApiLimitPopover({ isOpen }: ApiLimitPopoverProps) {
                     </div>
 
                     <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
+                        {/* Full-width bar scaled via transform instead of animating
+                            `width` - width/layout-property transitions force a
+                            layout recalculation on every frame, transform doesn't. */}
                         <div
-                            className="
-                                h-full rounded-full bg-emerald-500 transition-[width] duration-300 ease-[cubic-bezier(.2,.8,.2,1)]
-                            "
-                            style={{ width: `${usedPercent}%` }}
+                            className="h-full w-full origin-left rounded-full bg-emerald-500 transition-transform duration-300 ease-[cubic-bezier(.2,.8,.2,1)]"
+                            style={{ transform: `scaleX(${usedPercent / 100})` }}
                         />
                     </div>
 
@@ -129,16 +126,23 @@ function ApiLimitPopover({ isOpen }: ApiLimitPopoverProps) {
                     </div>
                 </div>
 
-                {errorMessage ? (
-                    <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 font-sans text-xs text-amber-700 dark:text-amber-300">
-                        {errorMessage}
-                    </div>
-                ) : (
-                    <div className="flex items-center gap-2 font-sans text-xs text-muted-foreground">
-                        <Activity size={13} />
-                        <span>Updates on open. Refresh uses one Salesforce API call.</span>
-                    </div>
-                )}
+                {/* Fixed min-height keeps this footer the same size whether it's
+                    showing the plain status line or the taller bordered error
+                    box - otherwise the popover's overall height (and therefore
+                    its position, since Radix repositions on resize) shifted
+                    right after the budget fetch resolved. */}
+                <div className="flex min-h-9 items-center font-sans text-xs">
+                    {errorMessage ? (
+                        <div className="w-full rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-amber-700 dark:text-amber-300">
+                            {errorMessage}
+                        </div>
+                    ) : (
+                        <div className="flex items-center gap-2 text-muted-foreground">
+                            <Activity size={13} />
+                            <span>Updates on open. Refresh uses one Salesforce API call.</span>
+                        </div>
+                    )}
+                </div>
             </div>
         </PopoverContent>
     );

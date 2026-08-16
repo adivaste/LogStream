@@ -7,6 +7,7 @@ import { Button } from '../ui/button';
 import { IconCrossfade } from '../ui/icon-crossfade';
 import { Popover, PopoverTrigger } from '../ui/popover';
 import { ApiLimitPopover } from './ApiLimitPopover';
+import { ConnectionPopover } from './ConnectionPopover';
 import { KeyboardShortcutsPopover } from './KeyboardShortcutsPopover';
 import { TraceFlagPopover } from './TraceFlagPopover';
 
@@ -36,12 +37,15 @@ function Header() {
     const connectionInfo = useUIStore(state => state.connectionInfo);
     const sessionDetectionState = useUIStore(state => state.sessionDetectionState);
     const refreshSession = useUIStore(state => state.refreshSession);
+    const setConnectionInfo = useUIStore(state => state.setConnectionInfo);
 
     // State
     const isLiveStreamOn: boolean = useUIStore(state => state.isLiveStreamOn);
     const livePollingState = useUIStore(state => state.livePollingState);
     const isTraceFlagPopoverOpen: boolean = useUIStore(state => state.isTraceFlagPopoverOpen);
     const [isApiLimitPopoverOpen, setIsApiLimitPopoverOpen] = React.useState(false);
+    const [isConnectionPopoverOpen, setIsConnectionPopoverOpen] = React.useState(false);
+    const isConnected = sessionDetectionState === 'connected' && Boolean(connectionInfo);
     const isShortcutsPopoverOpen: boolean = useUIStore(state => state.isShortcutsPopoverOpen);
     const isSettingsModalOpen: boolean = useUIStore(state => state.isSettingsModalOpen);
     const theme = useUIStore(state => state.theme);
@@ -68,10 +72,6 @@ function Header() {
 
         if (livePollingState === 'offline') {
             return 'Offline';
-        }
-
-        if (livePollingState === 'api_throttled') {
-            return 'Throttled';
         }
 
         if (livePollingState === 'api_exceeded') {
@@ -219,21 +219,46 @@ function Header() {
                     </div>
                 </Button>
 
-                {/* Detect Salesforce Session */}
-                <Button
-                    size='icon-sm'
-                    variant='outline'
-                    title='Detect Salesforce Session'
-                    aria-label='Detect Salesforce Session'
-                    aria-busy={sessionDetectionState === 'detecting'}
-                    className={`
-                        ${HEADER_BUTTON_CLASSNAME}
-                        ${sessionDetectionState === 'connected' ? 'text-emerald-600 dark:text-emerald-300' : ''}
-                    `}
-                    onClick={() => void refreshSession()}
+                {/* Detect Salesforce Session / Connection Details */}
+                <Popover
+                    open={isConnected && isConnectionPopoverOpen}
+                    onOpenChange={setIsConnectionPopoverOpen}
                 >
-                    <PlugZap className={`w-5 h-5 ${sessionDetectionState === 'detecting' ? 'animate-pulse' : ''}`} />
-                </Button>
+                    <PopoverTrigger asChild>
+                        <Button
+                            size='icon-sm'
+                            variant='outline'
+                            title={isConnected ? 'Connection Details' : 'Detect Salesforce Session'}
+                            aria-label={isConnected ? 'Connection Details' : 'Detect Salesforce Session'}
+                            aria-busy={sessionDetectionState === 'detecting'}
+                            aria-expanded={isConnected ? isConnectionPopoverOpen : undefined}
+                            className={`
+                                ${HEADER_BUTTON_CLASSNAME}
+                                ${isConnected ? 'text-emerald-600 dark:text-emerald-300' : ''}
+                            `}
+                            onClick={() => {
+                                // Once connected, this button's job switches from
+                                // "detect a session" to "show connection details" -
+                                // the Popover's own trigger click handles opening in
+                                // that case, so only re-detect when not connected.
+                                if (!isConnected) {
+                                    void refreshSession();
+                                }
+                            }}
+                        >
+                            <PlugZap className={`w-5 h-5 ${sessionDetectionState === 'detecting' ? 'animate-pulse' : ''}`} />
+                        </Button>
+                    </PopoverTrigger>
+                    {isConnected && connectionInfo && (
+                        <ConnectionPopover
+                            connectionInfo={connectionInfo}
+                            onDisconnect={() => {
+                                setConnectionInfo(null);
+                                setIsConnectionPopoverOpen(false);
+                            }}
+                        />
+                    )}
+                </Popover>
 
                 {/* API Limit Usage */}
                 <Popover

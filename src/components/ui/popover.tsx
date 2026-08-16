@@ -34,7 +34,18 @@ function PopoverContent({
                 align={align}
                 sideOffset={sideOffset}
                 className={cn(
-                    "bg-popover text-popover-foreground data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 z-50 w-72 origin-(--radix-popover-content-transform-origin) rounded-md border p-3 shadow-md outline-hidden",
+                    `
+                        bg-popover text-popover-foreground z-50 w-72 origin-(--radix-popover-content-transform-origin)
+                        rounded-md border p-3 shadow-md outline-hidden
+                        data-[state=open]:animate-in data-[state=closed]:animate-out
+                        data-[state=open]:fade-in-0 data-[state=closed]:fade-out-0
+                    `,
+                    // Menu-dropdown motion tokens (transitions-dev): grows from
+                    // its trigger's origin on open, settles slightly on close
+                    // instead of using a symmetric one-size zoom for both.
+                    "data-[state=open]:zoom-in-[97%] data-[state=closed]:zoom-out-[99%]",
+                    "data-[state=open]:duration-250 data-[state=closed]:duration-150",
+                    "data-[state=open]:ease-[cubic-bezier(0.22,1,0.36,1)] data-[state=closed]:ease-[cubic-bezier(0.22,1,0.36,1)]",
                     className
                 )}
                 {...props}

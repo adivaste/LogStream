@@ -189,6 +189,11 @@ function LogList({
     const sortBy: SortBy = useTableUIStore(state => state.sortBy);
     const sortDirection: SortDirection = useTableUIStore(state => state.sortDirection);
     const searchQuery = useTableUIStore(state => state.searchQuery);
+    // Filtering/sorting the full log array is synchronous work that scales
+    // with however much history is loaded - deferring it (same pattern as
+    // TraceFlagPopover's user search) keeps each keystroke in the search box
+    // responsive instead of blocking on a full re-filter every time.
+    const deferredSearchQuery = React.useDeferredValue(searchQuery);
     const selectedUser = useTableUIStore(state => state.selectedUser);
     const startTime = useTableUIStore(state => state.startTime);
     const endTime = useTableUIStore(state => state.endTime);
@@ -210,14 +215,14 @@ function LogList({
     // Derived list state
     const filteredLogs = React.useMemo(() => {
         return filterLogs(logs, {
-            searchQuery,
+            searchQuery: deferredSearchQuery,
             selectedUser,
             startTime,
             endTime,
             minSizeBytes,
             maxSizeBytes
         });
-    }, [endTime, logs, maxSizeBytes, minSizeBytes, searchQuery, selectedUser, startTime]);
+    }, [deferredSearchQuery, endTime, logs, maxSizeBytes, minSizeBytes, selectedUser, startTime]);
 
     const sortedLogs = React.useMemo(() => {
         return sortLogs(filteredLogs, sortBy, sortDirection);
@@ -488,11 +493,19 @@ function LogList({
                     showScrolledShadow={!scrollEdges.atTop}
                 />
 
+                {/* A load failure while cached logs already exist (session expired
+                    mid-session, background poll failed, etc) must not hide those
+                    logs - showing the last-known logs during an outage is a
+                    deliberate feature, not a fallback to apologize for. So the
+                    error only takes over the full row area below when there is
+                    nothing cached to fall back to; otherwise it stays silent
+                    here and the rows just keep rendering as-is. */}
+
                 <div
                     role="rowgroup"
                     className="relative block"
                     style={{
-                        height: isLoading || errorMessage || (logs.length > 0 && sortedLogs.length === 0)
+                        height: isLoading || (errorMessage && sortedLogs.length === 0) || (logs.length > 0 && sortedLogs.length === 0)
                             ? '240px'
                             : `${rowVirtualizer.getTotalSize()}px`
                     }}
@@ -507,7 +520,7 @@ function LogList({
                         />
                     )}
 
-                    {errorMessage && (
+                    {errorMessage && sortedLogs.length === 0 && (
                         <EmptyState
                             className="absolute inset-0"
                             icon={AlertCircle}

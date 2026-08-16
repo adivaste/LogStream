@@ -138,6 +138,6 @@ export const startBackgroundRuntime = () => {
     registerMessageListener();
     registerActionClickListener();
     void initBackgroundRuntime().then(() => {
-        liveLogPoller.start();
+        void liveLogPoller.start();
     });
 }

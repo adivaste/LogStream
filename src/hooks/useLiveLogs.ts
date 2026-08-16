@@ -3,9 +3,7 @@ import React from "react";
 import {
     LIVE_LOG_ACTIVITY_EVENTS,
     LIVE_LOG_IDLE_CHECK_INTERVAL_MS,
-    LIVE_LOG_IDLE_TIMEOUT_MS,
-    LIVE_LOG_PAGE_LIMIT,
-    LIVE_LOG_POLL_INTERVAL_MS
+    LIVE_LOG_PAGE_LIMIT
 } from "@/lib/livePollingConfig";
 import { mapSalesforceLogToUiLog } from "@/lib/logEntryMapper";
 import { sendWorkerRequest } from "@/services/backgroundBridge";
@@ -62,6 +60,8 @@ export const useLiveLogs = () => {
     const connectionInfo = useUIStore(state => state.connectionInfo);
     const isLiveStreamOn = useUIStore(state => state.isLiveStreamOn);
     const setLivePollingState = useUIStore(state => state.setLivePollingState);
+    const pollIntervalMs = useUIStore(state => state.pollingPreferences.pollIntervalMs);
+    const idleTimeoutMs = useUIStore(state => state.pollingPreferences.idleTimeoutMs);
     const orgId = connectionInfo?.orgId ?? null;
     const [state, setState] = React.useState<UseLiveLogsState>(INITIAL_LIVE_LOGS_STATE);
     const isRequestInFlightRef = React.useRef(false);
@@ -182,9 +182,18 @@ export const useLiveLogs = () => {
                 const incomingLogs = response.page.logs.map(mapSalesforceLogToUiLog);
 
                 setState(currentState => ({
+                    // `mergeLogsById` always builds a new array via spread, even
+                    // with zero incoming logs - every ~5s poll tick would then
+                    // hand LogFilterBar/Insights a new `logs` reference for no
+                    // reason, forcing their useMemos (unique users, chart
+                    // buckets) to recompute and Recharts to re-render on every
+                    // tick, live-streaming or not. Reuse the existing reference
+                    // whenever nothing actually arrived.
                     logs: isInitialLoad
                         ? incomingLogs
-                        : mergeLogsById(incomingLogs, currentState.logs),
+                        : incomingLogs.length === 0
+                            ? currentState.logs
+                            : mergeLogsById(incomingLogs, currentState.logs),
                     isLoading: false,
                     isLoadingOlderLogs: false,
                     hasOlderLogs: isInitialLoad
@@ -194,8 +203,14 @@ export const useLiveLogs = () => {
                     olderLogsErrorMessage: null
                 }));
 
+                // The cache read above succeeds regardless of whether Salesforce
+                // was actually reachable this tick - trust the poller's real
+                // outcome (attached only by GET_LOGS) instead of assuming "live"
+                // just because a local read worked. Without this, a dead session
+                // still showed a green "Live Streaming" badge for as long as
+                // cached logs kept the request "succeeding".
                 if (isConnected && isLiveStreamOn && !isIdleRef.current) {
-                    setLivePollingState('live');
+                    setLivePollingState(response.livePollingState ?? 'live');
                 }
 
                 return;
@@ -450,7 +465,7 @@ export const useLiveLogs = () => {
         }
 
         const idleCheckId = window.setInterval(() => {
-            const isPastIdleTimeout = Date.now() - lastActivityAtRef.current >= LIVE_LOG_IDLE_TIMEOUT_MS;
+            const isPastIdleTimeout = Date.now() - lastActivityAtRef.current >= idleTimeoutMs;
             const isPageHidden = document.visibilityState === 'hidden';
 
             if ((isPastIdleTimeout || isPageHidden) && !isIdleRef.current) {
@@ -465,13 +480,13 @@ export const useLiveLogs = () => {
             }
 
             void loadLogs();
-        }, LIVE_LOG_POLL_INTERVAL_MS);
+        }, pollIntervalMs);
 
         return () => {
             window.clearInterval(idleCheckId);
             window.clearInterval(pollId);
         };
-    }, [isConnected, isLiveStreamOn, loadLogs, setLivePollingState]);
+    }, [idleTimeoutMs, isConnected, isLiveStreamOn, loadLogs, pollIntervalMs, setLivePollingState]);
 
     return {
         ...state,

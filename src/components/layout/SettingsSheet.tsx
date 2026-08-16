@@ -1,74 +1,93 @@
-import React from "react";
-import { Moon, PlugZap, Sun } from "lucide-react";
-
-import { readAppPreferences } from "@/lib/appPreferences";
 import { useUIStore } from "@/store/uiStore";
 
-import { Button } from "../ui/button";
-import { IconCrossfade } from "../ui/icon-crossfade";
-import { Switch } from "../ui/switch";
 import {
-    Sheet,
-    SheetContent,
-    SheetDescription,
-    SheetFooter,
-    SheetHeader,
-    SheetTitle,
-} from "../ui/sheet";
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "../ui/dialog";
+import { Switch } from "../ui/switch";
+
+const MS_PER_SECOND = 1_000;
+const MS_PER_MINUTE = 60_000;
+
+// Number inputs work in the friendliest unit for each preference (seconds
+// for the shorter ones, minutes for trace flag duration) and convert to/from
+// milliseconds at the boundary - the store/persistence layer only ever deals
+// in milliseconds.
+const msToSeconds = (ms: number) => Math.round(ms / MS_PER_SECOND);
+const secondsToMs = (seconds: number) => Math.round(seconds * MS_PER_SECOND);
+const msToMinutes = (ms: number) => Math.round(ms / MS_PER_MINUTE);
+const minutesToMs = (minutes: number) => Math.round(minutes * MS_PER_MINUTE);
+
+type NumberFieldProps = {
+    label: string;
+    description: string;
+    unit: string;
+    value: number;
+    min: number;
+    onChange: (_value: number) => void;
+}
+
+function NumberField({ label, description, unit, value, min, onChange }: NumberFieldProps) {
+    return (
+        <label className="flex items-center justify-between gap-4 py-1">
+            <span className="flex flex-col gap-0.5">
+                <span className="text-sm text-foreground">{label}</span>
+                <span className="text-xs text-muted-foreground">{description}</span>
+            </span>
+            <span className="flex shrink-0 items-center gap-1.5">
+                <input
+                    type="number"
+                    min={min}
+                    step="1"
+                    value={value}
+                    onChange={(e) => {
+                        const nextValue = Number.parseFloat(e.target.value);
+
+                        if (!Number.isNaN(nextValue) && nextValue >= min) {
+                            onChange(nextValue);
+                        }
+                    }}
+                    // Native up/down spinners don't match this app's input styling
+                    // anywhere else - hide them (both engines) and keep the value
+                    // editable only via typing or the OS's own numeric keypad.
+                    className="
+                        h-8 w-20 rounded-md border-0 bg-input/80 px-2 text-right text-sm shadow-xs outline-none
+                        transition-[color,box-shadow] [appearance:textfield] focus-visible:ring-[3px] focus-visible:ring-ring/50
+                        [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none
+                    "
+                />
+                <span className="w-8 text-xs text-muted-foreground">{unit}</span>
+            </span>
+        </label>
+    );
+}
 
 export const SettingsSheet = () => {
     const isOpen = useUIStore(state => state.isSettingsModalOpen);
     const setOpen = useUIStore(state => state.setSettingsModalOpen);
-    const theme = useUIStore(state => state.theme);
-    const toggleTheme = useUIStore(state => state.toggleTheme);
-    const connectionInfo = useUIStore(state => state.connectionInfo);
-    const setConnectionInfo = useUIStore(state => state.setConnectionInfo);
     const isInsightsVisible = useUIStore(state => state.isInsightsVisible);
     const toggleInsightsVisible = useUIStore(state => state.toggleInsightsVisible);
-
-    const recentOrgs = React.useMemo(() => {
-        if (!isOpen) {
-            return [];
-        }
-
-        return readAppPreferences().connection.recentOrgs;
-    }, [isOpen]);
+    const pollingPreferences = useUIStore(state => state.pollingPreferences);
+    const updatePollingPreferences = useUIStore(state => state.updatePollingPreferences);
 
     return (
-        <Sheet open={isOpen} onOpenChange={setOpen}>
-            <SheetContent className="font-sans">
-                <SheetHeader>
-                    <SheetTitle>Settings</SheetTitle>
-                    <SheetDescription>
+        <Dialog open={isOpen} onOpenChange={setOpen}>
+            <DialogContent className="font-sans">
+                <DialogHeader>
+                    <DialogTitle>Settings</DialogTitle>
+                    <DialogDescription>
                         Preferences for this extension. Changes apply immediately.
-                    </SheetDescription>
-                </SheetHeader>
+                    </DialogDescription>
+                </DialogHeader>
 
-                <div className="flex flex-col gap-6 px-4">
+                <div className="grid max-h-[60vh] grid-cols-2 gap-x-8 gap-y-6 overflow-y-auto px-6">
                     <section className="flex flex-col gap-2">
                         <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                            Appearance
-                        </h3>
-                        <Button
-                            variant="outline"
-                            className="justify-start gap-2"
-                            onClick={toggleTheme}
-                        >
-                            <IconCrossfade
-                                activeKey={theme}
-                                className="size-4"
-                                icons={{
-                                    dark: <Sun className="h-4 w-4" />,
-                                    light: <Moon className="h-4 w-4" />
-                                }}
-                            />
-                            Switch to {theme === 'dark' ? 'light' : 'dark'} mode
-                        </Button>
-                    </section>
-
-                    <section className="flex flex-col gap-2">
-                        <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                            Preferences
+                            UI
                         </h3>
                         <label className="flex items-center justify-between gap-3 py-1">
                             <span className="text-sm text-foreground">Show insights section</span>
@@ -79,44 +98,53 @@ export const SettingsSheet = () => {
                         </label>
                     </section>
 
-                    <section className="flex flex-col gap-2">
+                    <section className="col-span-2 flex flex-col gap-1 border-t border-border pt-4">
                         <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                            Connection
+                            Live Streaming
                         </h3>
-                        {connectionInfo ? (
-                            <Button
-                                variant="outline"
-                                className="justify-start gap-2 text-red-600 dark:text-red-300"
-                                onClick={() => setConnectionInfo(null)}
-                            >
-                                <PlugZap className="h-4 w-4" />
-                                Disconnect current org
-                            </Button>
-                        ) : (
-                            <p className="text-sm text-muted-foreground">No org connected.</p>
-                        )}
 
-                        {recentOrgs.length > 0 && (
-                            <div className="mt-1 flex flex-col gap-1">
-                                <p className="text-[11px] text-muted-foreground">Recently connected</p>
-                                {recentOrgs.map(org => (
-                                    <div
-                                        key={org.orgId}
-                                        className="flex items-center justify-between rounded-md border border-border px-2.5 py-1.5 text-sm"
-                                    >
-                                        <span className="truncate">{org.orgName ?? org.orgId}</span>
-                                        <span className="text-xs text-muted-foreground">{org.environment}</span>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
+                        <NumberField
+                            label="Poll interval"
+                            description="How often new logs are fetched while live streaming."
+                            unit="sec"
+                            min={1}
+                            value={msToSeconds(pollingPreferences.pollIntervalMs)}
+                            onChange={(seconds) => updatePollingPreferences({ pollIntervalMs: secondsToMs(seconds) })}
+                        />
+
+                        <NumberField
+                            label="Idle timeout"
+                            description="Pause live streaming after this long with no activity."
+                            unit="sec"
+                            min={5}
+                            value={msToSeconds(pollingPreferences.idleTimeoutMs)}
+                            onChange={(seconds) => updatePollingPreferences({ idleTimeoutMs: secondsToMs(seconds) })}
+                        />
+
+                        <NumberField
+                            label="Trace flag duration"
+                            description="How long a trace flag stays active once enabled."
+                            unit="min"
+                            min={1}
+                            value={msToMinutes(pollingPreferences.traceFlagDurationMs)}
+                            onChange={(minutes) => updatePollingPreferences({ traceFlagDurationMs: minutesToMs(minutes) })}
+                        />
+
+                        <NumberField
+                            label="Slow log threshold"
+                            description={'Requests slower than this count toward "Slow Reqs" in Insights.'}
+                            unit="sec"
+                            min={1}
+                            value={msToSeconds(pollingPreferences.slowLogThresholdMs)}
+                            onChange={(seconds) => updatePollingPreferences({ slowLogThresholdMs: secondsToMs(seconds) })}
+                        />
                     </section>
                 </div>
 
-                <SheetFooter>
+                <DialogFooter>
                     <p className="text-xs text-muted-foreground">LogStream</p>
-                </SheetFooter>
-            </SheetContent>
-        </Sheet>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
     );
 };

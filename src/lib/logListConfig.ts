@@ -3,6 +3,10 @@ import { type LogEntry, SortBy, SortDirection } from "@/types/ui";
 export const LOG_ROW_HEIGHT = 37;
 export const LOG_VIRTUAL_SCROLL_MARGIN = 96;
 export const LOG_PAGE_NAVIGATION_SIZE = 10;
+
+// Default for the user-configurable "slow log" threshold (Settings >
+// Preferences) - see appPreferences.ts's `polling` section.
+export const DEFAULT_SLOW_LOG_THRESHOLD_MS = 2_000;
 export const LOG_TABLE_GRID_TEMPLATE_COLUMNS = 'minmax(18rem,2.2fr) minmax(9rem,1fr) minmax(8rem,1fr) 8rem 8rem 8rem';
 
 export const LOG_TABLE_COLUMNS: SortBy[] = [

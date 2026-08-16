@@ -15,19 +15,28 @@ type SalesforceErrorResponse = {
 // between "syncing" and "offline" instead of surfacing "session expired".
 export class SalesforceSessionExpiredError extends Error {}
 
-const parseSalesforceErrorMessage = async (response: Response) => {
+// A 403 with this specific errorCode means the org's daily API request limit
+// has actually been hit (not a soft warning threshold - Salesforce itself is
+// refusing further calls). Distinguishing it lets live polling stop and
+// surface "limit reached" instead of retrying into more failures.
+export class SalesforceApiLimitExceededError extends Error {}
+
+const parseSalesforceError = async (response: Response) => {
     try {
         const body = await response.json() as SalesforceErrorResponse[];
         const firstError = body[0];
 
         if (firstError?.message) {
-            return `${firstError.errorCode ?? response.status}: ${firstError.message}`;
+            return {
+                message: `${firstError.errorCode ?? response.status}: ${firstError.message}`,
+                errorCode: firstError.errorCode
+            };
         }
     } catch {
         // Fall back to status text below.
     }
 
-    return `${response.status} ${response.statusText}`;
+    return { message: `${response.status} ${response.statusText}`, errorCode: undefined };
 }
 
 const assertResponseOk = async (response: Response) => {
@@ -35,10 +44,14 @@ const assertResponseOk = async (response: Response) => {
         return;
     }
 
-    const message = await parseSalesforceErrorMessage(response);
+    const { message, errorCode } = await parseSalesforceError(response);
 
     if (response.status === 401) {
         throw new SalesforceSessionExpiredError(message);
+    }
+
+    if (response.status === 403 && errorCode === 'REQUEST_LIMIT_EXCEEDED') {
+        throw new SalesforceApiLimitExceededError(message);
     }
 
     throw new Error(message);

@@ -8,12 +8,9 @@ import {
     type ChartConfig,
 } from "@/components/ui/chart";
 import { useTableUIStore } from "@/store/tableUIStore";
+import { useUIStore } from "@/store/uiStore";
 import type { LogEntry } from "@/types/ui";
 
-// A log is considered "slow" past this duration. Salesforce itself doesn't
-// define a universal threshold - 2s is a common rule of thumb for Apex/SOQL
-// work worth investigating.
-const SLOW_LOG_THRESHOLD_MS = 2000;
 const CHART_HEIGHT_PX = 168; // matches the previous fixed h-42 footprint
 
 const parseDurationMs = (duration: string): number | null => {
@@ -66,7 +63,7 @@ type StatTile = {
     tone?: 'default' | 'destructive';
 }
 
-const useInsightsStats = (logs: LogEntry[]): StatTile[] => {
+const useInsightsStats = (logs: LogEntry[], slowLogThresholdMs: number): StatTile[] => {
     return React.useMemo(() => {
         const durations = logs
             .map(log => parseDurationMs(log.duration))
@@ -75,7 +72,7 @@ const useInsightsStats = (logs: LogEntry[]): StatTile[] => {
             .map(log => parseSizeBytes(log.size))
             .filter((value): value is number => value !== null);
         const activeUsers = new Set(logs.map(log => log.user)).size;
-        const slowLogCount = durations.filter(value => value > SLOW_LOG_THRESHOLD_MS).length;
+        const slowLogCount = durations.filter(value => value > slowLogThresholdMs).length;
         const avgDurationMs = durations.length > 0
             ? durations.reduce((sum, value) => sum + value, 0) / durations.length
             : null;
@@ -99,7 +96,7 @@ const useInsightsStats = (logs: LogEntry[]): StatTile[] => {
             },
             { label: 'Active Users', value: activeUsers.toLocaleString() }
         ];
-    }, [logs]);
+    }, [logs, slowLogThresholdMs]);
 }
 
 type ChartBucket = {
@@ -184,7 +181,8 @@ type InsightsProps = {
 }
 
 function Insights({ logs }: InsightsProps) {
-    const stats = useInsightsStats(logs);
+    const slowLogThresholdMs = useUIStore(state => state.pollingPreferences.slowLogThresholdMs);
+    const stats = useInsightsStats(logs, slowLogThresholdMs);
     const nowMs = useNowMs();
     const buckets = useHourlyLogBuckets(logs, nowMs);
     const setTimeRange = useTableUIStore(state => state.setTimeRange);

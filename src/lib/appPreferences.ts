@@ -1,3 +1,9 @@
+import {
+    DEFAULT_LIVE_LOG_IDLE_TIMEOUT_MS,
+    DEFAULT_LIVE_LOG_POLL_INTERVAL_MS
+} from "@/lib/livePollingConfig";
+import { DEFAULT_SLOW_LOG_THRESHOLD_MS } from "@/lib/logListConfig";
+import { DEFAULT_TRACE_FLAG_DURATION_MS } from "@/lib/traceFlagConfig";
 import type { SalesforceConnectionInfo, SalesforceOrgId } from "@/types/salesforce";
 import { SortBy, SortDirection, type Theme } from "@/types/ui";
 
@@ -21,6 +27,12 @@ export type AppPreferences = {
     preferences: {
         showInsights: boolean;
     };
+    polling: {
+        pollIntervalMs: number;
+        idleTimeoutMs: number;
+        traceFlagDurationMs: number;
+        slowLogThresholdMs: number;
+    };
     logTable: {
         sortBy: SortBy;
         sortDirection: SortDirection;
@@ -38,6 +50,12 @@ export const DEFAULT_APP_PREFERENCES: AppPreferences = {
     },
     preferences: {
         showInsights: true
+    },
+    polling: {
+        pollIntervalMs: DEFAULT_LIVE_LOG_POLL_INTERVAL_MS,
+        idleTimeoutMs: DEFAULT_LIVE_LOG_IDLE_TIMEOUT_MS,
+        traceFlagDurationMs: DEFAULT_TRACE_FLAG_DURATION_MS,
+        slowLogThresholdMs: DEFAULT_SLOW_LOG_THRESHOLD_MS
     },
     logTable: {
         sortBy: SortBy.TIMESTAMP,
@@ -59,6 +77,10 @@ const isTheme = (value: unknown): value is Theme => {
 
 const isBoolean = (value: unknown): value is boolean => {
     return typeof value === 'boolean';
+}
+
+const isPositiveNumber = (value: unknown): value is number => {
+    return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 
 const isSortBy = (value: unknown): value is SortBy => {
@@ -121,6 +143,7 @@ const normalizePreferences = (value: unknown): AppPreferences => {
 
     const appearance = isObject(value.appearance) ? value.appearance : {};
     const preferences = isObject(value.preferences) ? value.preferences : {};
+    const polling = isObject(value.polling) ? value.polling : {};
     const logTable = isObject(value.logTable) ? value.logTable : {};
     const connection = isObject(value.connection) ? value.connection : {};
     const recentOrgs = Array.isArray(connection.recentOrgs)
@@ -140,6 +163,20 @@ const normalizePreferences = (value: unknown): AppPreferences => {
             showInsights: isBoolean(preferences.showInsights)
                 ? preferences.showInsights
                 : DEFAULT_APP_PREFERENCES.preferences.showInsights
+        },
+        polling: {
+            pollIntervalMs: isPositiveNumber(polling.pollIntervalMs)
+                ? polling.pollIntervalMs
+                : DEFAULT_APP_PREFERENCES.polling.pollIntervalMs,
+            idleTimeoutMs: isPositiveNumber(polling.idleTimeoutMs)
+                ? polling.idleTimeoutMs
+                : DEFAULT_APP_PREFERENCES.polling.idleTimeoutMs,
+            traceFlagDurationMs: isPositiveNumber(polling.traceFlagDurationMs)
+                ? polling.traceFlagDurationMs
+                : DEFAULT_APP_PREFERENCES.polling.traceFlagDurationMs,
+            slowLogThresholdMs: isPositiveNumber(polling.slowLogThresholdMs)
+                ? polling.slowLogThresholdMs
+                : DEFAULT_APP_PREFERENCES.polling.slowLogThresholdMs
         },
         logTable: {
             sortBy: isSortBy(logTable.sortBy)
@@ -254,6 +291,18 @@ export const persistShowInsightsPreference = (showInsights: boolean) => {
         preferences: {
             ...preferences.preferences,
             showInsights
+        }
+    }));
+}
+
+export const persistPollingPreferences = (
+    polling: Partial<AppPreferences['polling']>
+) => {
+    return updateAppPreferences(preferences => ({
+        ...preferences,
+        polling: {
+            ...preferences.polling,
+            ...polling
         }
     }));
 }
