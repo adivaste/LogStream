@@ -5,18 +5,13 @@
         <link rel="icon" type="image/png" href="/src/assets/images/favicon.png" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>LogStream</title>
-        <script>
-            (() => {
-                try {
-                    const preferences = JSON.parse(localStorage.getItem('logstream-preferences') || '{}');
-                    const savedTheme = preferences?.appearance?.theme || localStorage.getItem('logstream-theme');
-
-                    document.documentElement.classList.toggle('dark', savedTheme === 'dark');
-                } catch {
-                    // Keep the default light theme when storage is unavailable.
-                }
-            })();
-        </script>
+        <!-- External file (not inline) - Firefox's default extension CSP
+             (script-src 'self') blocks inline scripts outright, so this must
+             be a same-origin file to run at all. A plain classic <script src>
+             here (no type="module"/defer/async) keeps the same blocking,
+             runs-before-paint timing the inline version had, which is what
+             prevents a light-theme flash before the dark class is applied. -->
+        <script src="/theme-init.js"></script>
       </head>
       <body>
         <div id="root"></div>

@@ -3,7 +3,7 @@
     "name" : "LogStream",
     "version" : "1.0.0",
     "icons" : {
-        "128" : "icons/icon128.png"
+        "512" : "icons/icon128.png"
     },
     "description" : "Firefox extension which allows to view salesforce/apex log hustle free with better UI and accessibility.",
     "permissions" : [
@@ -30,13 +30,16 @@
     "action" : {
         "default_title" : "Open LogStream",
         "default_icon" : {
-            "128" : "icons/icon128.png"
+            "512" : "icons/icon128.png"
         }
     },
     "browser_specific_settings" : {
         "gecko" : {
             "id" : "logstream@aditya-vaste.dev",
-            "strict_min_version" : "121.0"
+            "strict_min_version" : "142.0",
+            "data_collection_permissions" : {
+                "required" : ["none"]
+            }
         }
     }
 }
