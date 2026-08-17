@@ -762,27 +762,28 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
                 </Popover>
             </div>
 
-            {/* User-activated, compact - sits right below the toolbar, above
-                the log body, so it's easy to reach but never takes up space
-                unless someone actually asked to see it. */}
+            {/* User-activated - sits right below the toolbar, above the log
+                body, so it's easy to reach but never takes up space unless
+                someone actually asked to see it. Same stat-tile shape and
+                type scale as ApiLimitPopover's usage grid (11px sans label,
+                text-sm mono value) rather than a one-off treatment. */}
             {isLimitSummaryOpen && limitUsageMetrics.length > 0 && (
-                <div className="flex flex-wrap items-center gap-1.5 border-b border-border bg-muted/30 px-4 py-2">
+                <div className="grid grid-cols-4 gap-2 border-b border-border bg-muted/30 px-4 py-3 font-sans">
                     {limitUsageMetrics.map(metric => {
                         const usageRatio = metric.limit > 0 ? metric.used / metric.limit : 0;
-                        const toneClassName = usageRatio >= 0.95
-                            ? 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300'
+                        const valueToneClassName = usageRatio >= 0.95
+                            ? 'text-red-700 dark:text-red-400'
                             : usageRatio >= 0.75
-                                ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300'
-                                : 'border-border bg-background text-muted-foreground';
+                                ? 'text-amber-700 dark:text-amber-400'
+                                : 'text-primary';
 
                         return (
-                            <span
-                                key={metric.key}
-                                className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[11px] leading-none ${toneClassName}`}
-                            >
-                                {metric.label}
-                                <span className="font-medium">{metric.used.toLocaleString()}/{metric.limit.toLocaleString()}</span>
-                            </span>
+                            <div key={metric.key} className="rounded-md border border-border bg-background p-2">
+                                <div className="text-[11px] text-muted-foreground">{metric.label}</div>
+                                <div className={`mt-1 font-mono text-sm ${valueToneClassName}`}>
+                                    {metric.used.toLocaleString()}<span className="text-muted-foreground">/{metric.limit.toLocaleString()}</span>
+                                </div>
+                            </div>
                         );
                     })}
                 </div>
