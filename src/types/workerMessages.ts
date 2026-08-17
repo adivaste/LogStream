@@ -199,6 +199,11 @@ export type WorkerRequest =
         type: 'RUN_STORAGE_CLEANUP';
         requestId?: RequestId;
         orgId: SalesforceOrgId;
+    }
+    | {
+        type: 'HARD_CLEAR_STORAGE';
+        requestId?: RequestId;
+        orgId: SalesforceOrgId;
     };
 
 export type WorkerResponse =

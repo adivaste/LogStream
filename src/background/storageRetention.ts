@@ -1,6 +1,7 @@
 import type { SalesforceOrgId } from "@/types/salesforce";
 import { logBodyRepository } from "./db/logBodyRepository";
 import { logRepository } from "./db/logRepository";
+import { queueRepository } from "./db/queueRepository";
 
 const STORAGE_CLEANUP_ALARM_NAME = 'logstream-storage-cleanup';
 const RETENTION_DAYS_STORAGE_KEY = 'logstream.retentionDays';
@@ -140,5 +141,17 @@ export const storageRetentionService = {
     // actually looking at.
     async runSweepForOrg(orgId: SalesforceOrgId) {
         await this.sweepOrg(orgId, await this.getCutoffIso());
+    },
+
+    // Unconditional wipe, not policy-driven like sweepOrg above - every
+    // cached log, body, and pending download for this org is deleted
+    // regardless of age or size. The org's logs/bodies simply get re-fetched
+    // from Salesforce as the user reopens them, same as a first-ever visit.
+    async hardClearOrg(orgId: SalesforceOrgId) {
+        await Promise.all([
+            logRepository.deleteAllForOrg(orgId),
+            logBodyRepository.deleteAllForOrg(orgId),
+            queueRepository.deleteAllForOrg(orgId)
+        ]);
     }
 };

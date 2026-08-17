@@ -1,4 +1,4 @@
-import { Check, Trash2 } from "lucide-react";
+import { AlertTriangle, Check, Trash2 } from "lucide-react";
 import React from "react";
 
 import { useStorageUsage } from "@/hooks/useStorageUsage";
@@ -165,18 +165,30 @@ function CleanupTab() {
         usage,
         isLoading,
         isCleaningUp,
+        isHardClearing,
         errorMessage,
         isConnected,
         setRetentionDays,
-        runCleanupNow
+        runCleanupNow,
+        runHardClearNow
     } = useStorageUsage(isOpen);
     const [isCleanupFeedbackVisible, setIsCleanupFeedbackVisible] = React.useState(false);
     const cleanupFeedbackTimeoutRef = React.useRef<number | null>(null);
+    // Click-to-arm, click-again-to-confirm - a hard clear is a full,
+    // unconditional wipe (not just evicting stale/over-cap data like the
+    // regular cleanup), so it shouldn't be a single accidental click away.
+    // Auto-disarms after a few seconds if the second click never comes.
+    const [isHardClearArmed, setIsHardClearArmed] = React.useState(false);
+    const hardClearArmTimeoutRef = React.useRef<number | null>(null);
 
     React.useEffect(() => {
         return () => {
             if (cleanupFeedbackTimeoutRef.current) {
                 window.clearTimeout(cleanupFeedbackTimeoutRef.current);
+            }
+
+            if (hardClearArmTimeoutRef.current) {
+                window.clearTimeout(hardClearArmTimeoutRef.current);
             }
         };
     }, []);
@@ -199,6 +211,28 @@ function CleanupTab() {
         cleanupFeedbackTimeoutRef.current = window.setTimeout(() => {
             setIsCleanupFeedbackVisible(false);
         }, 1200);
+    }
+
+    const handleHardClearClick = () => {
+        if (!isHardClearArmed) {
+            setIsHardClearArmed(true);
+
+            if (hardClearArmTimeoutRef.current) {
+                window.clearTimeout(hardClearArmTimeoutRef.current);
+            }
+
+            hardClearArmTimeoutRef.current = window.setTimeout(() => {
+                setIsHardClearArmed(false);
+            }, 4000);
+            return;
+        }
+
+        if (hardClearArmTimeoutRef.current) {
+            window.clearTimeout(hardClearArmTimeoutRef.current);
+        }
+
+        setIsHardClearArmed(false);
+        void runHardClearNow();
     }
 
     if (!isConnected) {
@@ -287,6 +321,32 @@ function CleanupTab() {
                     value={usage.retentionDays}
                     onChange={(days) => void setRetentionDays(days)}
                 />
+            </div>
+
+            <div className="flex items-center justify-between gap-4 border-t border-border pt-3">
+                <span className="flex flex-col gap-0.5">
+                    <span className="text-sm text-foreground">Hard clear</span>
+                    <span className="text-xs text-muted-foreground">
+                        Deletes every cached log and body for this org, regardless of age or size.
+                        They'll be re-fetched from Salesforce as needed.
+                    </span>
+                </span>
+                <button
+                    type="button"
+                    disabled={isHardClearing}
+                    onClick={handleHardClearClick}
+                    className={`
+                        flex shrink-0 items-center gap-1.5 rounded-md border-0 px-2.5 py-1.5 text-xs font-medium
+                        transition-colors disabled:pointer-events-none disabled:opacity-60
+                        focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-destructive
+                        ${isHardClearArmed
+            ? 'bg-destructive/15 text-destructive hover:bg-destructive/20'
+            : 'bg-input/80 text-muted-foreground hover:bg-input/90 hover:text-destructive dark:bg-input/80 dark:hover:bg-input/90'}
+                    `}
+                >
+                    {isHardClearArmed ? <AlertTriangle size={13} /> : <Trash2 size={13} className={isHardClearing ? 'animate-pulse' : ''} />}
+                    {isHardClearing ? 'Clearing...' : isHardClearArmed ? 'Confirm hard clear?' : 'Hard clear'}
+                </button>
             </div>
         </div>
     );

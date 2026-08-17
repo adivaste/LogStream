@@ -17,6 +17,7 @@ const INITIAL_STORAGE_USAGE_STATE: UseStorageUsageState = {
 };
 
 const CLEANUP_ERROR_MESSAGE = 'Failed to clean up storage.';
+const HARD_CLEAR_ERROR_MESSAGE = 'Failed to clear storage.';
 
 export const useStorageUsage = (isEnabled: boolean) => {
     const connectionInfo = useUIStore(state => state.connectionInfo);
@@ -26,6 +27,7 @@ export const useStorageUsage = (isEnabled: boolean) => {
     // should keep the donut/stats visible and just show its own transient
     // feedback on the button, not blank the whole panel.
     const [isCleaningUp, setIsCleaningUp] = React.useState(false);
+    const [isHardClearing, setIsHardClearing] = React.useState(false);
 
     const refreshUsage = React.useCallback(async () => {
         if (!connectionInfo) {
@@ -135,6 +137,44 @@ export const useStorageUsage = (isEnabled: boolean) => {
         }
     }, [connectionInfo]);
 
+    const runHardClearNow = React.useCallback(async (): Promise<boolean> => {
+        if (!connectionInfo) {
+            return false;
+        }
+
+        setIsHardClearing(true);
+
+        try {
+            const response = await sendWorkerRequest({
+                type: 'HARD_CLEAR_STORAGE',
+                orgId: connectionInfo.orgId
+            });
+
+            if (response.type === 'STORAGE_USAGE') {
+                setState({
+                    usage: response.usage,
+                    isLoading: false,
+                    errorMessage: null
+                });
+                return true;
+            }
+
+            setState(currentState => ({
+                ...currentState,
+                errorMessage: response.type === 'ERROR' ? response.message : HARD_CLEAR_ERROR_MESSAGE
+            }));
+            return false;
+        } catch (error) {
+            setState(currentState => ({
+                ...currentState,
+                errorMessage: error instanceof Error ? error.message : HARD_CLEAR_ERROR_MESSAGE
+            }));
+            return false;
+        } finally {
+            setIsHardClearing(false);
+        }
+    }, [connectionInfo]);
+
     React.useEffect(() => {
         if (!isEnabled) {
             return;
@@ -146,9 +186,11 @@ export const useStorageUsage = (isEnabled: boolean) => {
     return {
         ...state,
         isCleaningUp,
+        isHardClearing,
         refreshUsage,
         setRetentionDays,
         runCleanupNow,
+        runHardClearNow,
         isConnected: Boolean(connectionInfo)
     };
 }

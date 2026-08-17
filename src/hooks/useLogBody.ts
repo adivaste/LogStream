@@ -23,7 +23,7 @@ const INITIAL_LOG_BODY_STATE: UseLogBodyState = {
 // only worth interrupting the user for a download that's genuinely slow.
 // Mirrors the app's existing "don't flash UI for fast things" rule
 // (useDelayedLoadingGate), just applied to a toast instead of a skeleton.
-const DOWNLOAD_TOAST_SHOW_DELAY_MS = 5_000;
+const DOWNLOAD_TOAST_SHOW_DELAY_MS = 800;
 // Primary gate, used whenever Content-Length IS known: shows the toast the
 // moment a log is known to be this big, regardless of how fast it downloads.
 // A time-only gate would miss an 18MB log entirely on a fast connection,
