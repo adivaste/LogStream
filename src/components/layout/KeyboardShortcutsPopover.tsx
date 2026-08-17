@@ -22,6 +22,19 @@ const SORT_SHORTCUTS: ShortcutItem[] = [
     { keys: ['S', 'T'], label: 'Sort by timestamp' }
 ];
 
+// Only fire while focus is inside the log body panel, so they can use
+// modifier combos the global bare-letter shortcuts above don't claim.
+const LOG_BODY_SHORTCUTS: ShortcutItem[] = [
+    { keys: ['Enter'], label: 'Pin line / open frame in raw log' },
+    { keys: ['↑', '↓'], label: 'Move between lines or frames' },
+    { keys: ['←', '→'], label: 'Collapse / expand frame' },
+    { keys: ['Ctrl', 'C'], label: 'Copy focused line' },
+    { keys: ['Ctrl', '⇧', 'C'], label: 'Copy pinned lines' },
+    { keys: ['Ctrl', '+'], label: 'Zoom in' },
+    { keys: ['Ctrl', '-'], label: 'Zoom out' },
+    { keys: ['Ctrl', '0'], label: 'Reset zoom' }
+];
+
 const ShortcutKeys = ({ keys }: { keys: string[] }) => {
     return (
         <span className="flex shrink-0 items-center gap-1">
@@ -82,7 +95,7 @@ export const KeyboardShortcutsPopover = () => {
                     </div>
                     <div>
                         <h2 className="text-sm font-semibold leading-none text-foreground">Keyboard Shortcuts</h2>
-                        <p className="mt-1 text-xs leading-none text-muted-foreground">Single-key actions and sort chords</p>
+                        <p className="mt-1 text-xs leading-none text-muted-foreground">Actions, sort chords, and log body navigation</p>
                     </div>
                 </div>
             </div>
@@ -90,6 +103,7 @@ export const KeyboardShortcutsPopover = () => {
             <div className="space-y-3 p-3">
                 <ShortcutSection title="Actions" shortcuts={GENERAL_SHORTCUTS} />
                 <ShortcutSection title="Sorting" shortcuts={SORT_SHORTCUTS} />
+                <ShortcutSection title="Log body" shortcuts={LOG_BODY_SHORTCUTS} />
             </div>
         </PopoverContent>
     );
