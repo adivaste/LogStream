@@ -270,12 +270,40 @@ export const updateAppPreferences = (
     return nextPreferences;
 }
 
+// A flat instant switch, not a fade - but most interactive elements carry
+// `transition-colors` for hover/focus feedback, and that utility can't tell
+// "the user is hovering" apart from "the CSS variable underneath just
+// changed because the theme flipped". Without this, toggling dark/light
+// visibly washes every button/badge/row across the whole app over its own
+// transition duration instead of snapping instantly. Standard fix: disable
+// all transitions for one frame around the class toggle, then restore them.
+const suppressTransitionsAcrossThemeSwitch = (applyTheme: () => void) => {
+    const root = document.documentElement;
+    const styleElement = document.createElement('style');
+
+    styleElement.textContent = '*, *::before, *::after { transition: none !important; }';
+    document.head.appendChild(styleElement);
+
+    applyTheme();
+
+    // Force a reflow so the browser paints the new theme under the
+    // transition-suppressing stylesheet before it gets removed - otherwise
+    // removing it synchronously could let the very next paint still animate.
+    void root.offsetHeight;
+
+    window.requestAnimationFrame(() => {
+        styleElement.remove();
+    });
+}
+
 export const applyThemePreference = (theme: Theme) => {
     if (typeof document === 'undefined') {
         return;
     }
 
-    document.documentElement.classList.toggle('dark', theme === 'dark');
+    suppressTransitionsAcrossThemeSwitch(() => {
+        document.documentElement.classList.toggle('dark', theme === 'dark');
+    });
 }
 
 export const initializeThemePreference = () => {
