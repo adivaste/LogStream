@@ -130,6 +130,10 @@ function LogBodyViewer({
     const pendingModeScrollRef = React.useRef<number | null>(null);
     const jumpHighlightTimeoutRef = React.useRef<number | null>(null);
     const [highlightedJumpLineIndex, setHighlightedJumpLineIndex] = React.useState<number | null>(null);
+    // Selecting a frame is separate from navigating to it - a click highlights
+    // the row and stays in the tree, so reading the tree doesn't keep throwing
+    // you back into the raw log.
+    const [selectedCallTreeNodeId, setSelectedCallTreeNodeId] = React.useState<number | null>(null);
     const [searchQuery, setSearchQuery] = React.useState('');
     const [isRegexEnabled, setIsRegexEnabled] = React.useState(false);
     const [activeMatchIndex, setActiveMatchIndex] = React.useState(-1);
@@ -1343,6 +1347,8 @@ function LogBodyViewer({
                     fontSizePx={fontSizePx}
                     lineHeightPx={lineHeightPx}
                     collapsedNodeIds={collapsedCallTreeNodes}
+                    selectedNodeId={selectedCallTreeNodeId}
+                    onSelectNode={setSelectedCallTreeNodeId}
                     onToggleCollapsed={onToggleCallTreeNode}
                     onSetCollapsedNodes={onSetCallTreeCollapsedNodes}
                     onJumpToSourceLine={handleJumpToSourceLine}

@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { AlertTriangle, ChevronRight, ListTree } from "lucide-react";
+import { AlertTriangle, ArrowRightToLine, ChevronRight, ListTree } from "lucide-react";
 import React from "react";
 
 import { EmptyState } from "@/components/ui/empty-state";
@@ -42,6 +42,10 @@ const AUTO_COLLAPSE_FROM_DEPTH = 2;
 const SKELETON_ROW_COUNT = 22;
 const SKELETON_LABEL_WIDTHS = [68, 42, 80, 55, 34, 72, 48, 62];
 
+// One definition shared by the header and every row, so the columns can't
+// drift out of alignment.
+const TREE_GRID_COLUMNS = 'grid-cols-[minmax(0,1fr)_3.5rem_4.5rem_4.5rem]';
+
 type FlatCallTreeRow = {
     node: CallNode;
     hasChildren: boolean;
@@ -56,6 +60,8 @@ type LogCallTreeProps = {
     fontSizePx: number;
     lineHeightPx: number;
     collapsedNodeIds: number[];
+    selectedNodeId: number | null;
+    onSelectNode: (_nodeId: number) => void;
     onToggleCollapsed: (_nodeId: number) => void;
     onSetCollapsedNodes: (_nodeIds: number[]) => void;
     onJumpToSourceLine: (_sourceLineIndex: number) => void;
@@ -97,7 +103,7 @@ function CallTreeSkeleton({ lineHeightPx }: { lineHeightPx: number }) {
             {Array.from({ length: SKELETON_ROW_COUNT }, (_, index) => (
                 <div
                     key={index}
-                    className="grid grid-cols-[minmax(0,1fr)_3rem_4.5rem_4.5rem] items-center"
+                    className={`grid ${TREE_GRID_COLUMNS} items-center`}
                     style={{ height: lineHeightPx }}
                 >
                     {/* The staggered indent is what makes this read as a tree
@@ -129,6 +135,8 @@ function LogCallTree({
     fontSizePx,
     lineHeightPx,
     collapsedNodeIds,
+    selectedNodeId,
+    onSelectNode,
     onToggleCollapsed,
     onSetCollapsedNodes,
     onJumpToSourceLine
@@ -232,14 +240,35 @@ function LogCallTree({
         focusMountedRow(row.node.id);
     }, [flatRows, focusMountedRow, rowVirtualizer]);
 
+    // Always select the frame being navigated from, so switching back to the
+    // tree lands you where you left rather than at the top.
+    const selectAndJump = React.useCallback((node: CallNode) => {
+        onSelectNode(node.id);
+        onJumpToSourceLine(node.sourceLineIndex);
+    }, [onJumpToSourceLine, onSelectNode]);
+
     const handleRowKeyDown = React.useCallback((
         event: React.KeyboardEvent<HTMLDivElement>,
         row: FlatCallTreeRow,
         flatIndex: number
     ) => {
-        if (event.key === 'Enter' || event.key === ' ') {
+        // Enter activates (leaves the tree for the raw log); Space stays put
+        // and expands/collapses. Splitting them matters because leaving the
+        // tree is the one action here that's disruptive to undo.
+        if (event.key === 'Enter') {
             event.preventDefault();
-            onJumpToSourceLine(row.node.sourceLineIndex);
+            selectAndJump(row.node);
+            return;
+        }
+
+        if (event.key === ' ') {
+            event.preventDefault();
+            onSelectNode(row.node.id);
+
+            if (row.hasChildren) {
+                onToggleCollapsed(row.node.id);
+            }
+
             return;
         }
 
@@ -290,7 +319,14 @@ function LogCallTree({
 
         event.preventDefault();
         focusRowAtFlatIndex(nextIndex);
-    }, [flatIndexByNodeId, flatRows.length, focusRowAtFlatIndex, onJumpToSourceLine, onToggleCollapsed]);
+    }, [
+        flatIndexByNodeId,
+        flatRows.length,
+        focusRowAtFlatIndex,
+        onSelectNode,
+        onToggleCollapsed,
+        selectAndJump
+    ]);
 
     // Exactly one row is Tab-reachable, falling back to the first row when the
     // previously focused node is inside a subtree that has since collapsed.
@@ -339,6 +375,23 @@ function LogCallTree({
                 </div>
             )}
 
+            {/* Without these the two right-hand numbers are ambiguous - "40ms"
+                next to "12ms" gives no clue which is total and which is self,
+                and self time is the column that actually points at a culprit. */}
+            <div
+                aria-hidden="true"
+                className={`
+                    grid ${TREE_GRID_COLUMNS} items-center border-b border-border bg-sidebar
+                    px-0 py-1.5 font-sans text-[10px] font-medium uppercase tracking-wide
+                    text-muted-foreground
+                `}
+            >
+                <span className="pl-2">Frame</span>
+                <span className="pr-2 text-right">Rows</span>
+                <span className="pr-2 text-right">Total</span>
+                <span className="pr-3 text-right">Self</span>
+            </div>
+
             <ScrollArea className="min-h-0 flex-1 bg-sidebar font-mono text-sm">
                 <ScrollAreaViewport ref={scrollParentRef} className="overscroll-contain">
                     <div
@@ -361,6 +414,7 @@ function LogCallTree({
                             );
                             const selfRatio = tree.totalMs > 0 ? node.selfMs / tree.totalMs : 0;
                             const kindClassName = getApexTokenClassName(KIND_COLOR_TOKEN[node.kind]);
+                            const isSelected = node.id === selectedNodeId;
 
                             return (
                                 <div
@@ -370,16 +424,23 @@ function LogCallTree({
                                     role="treeitem"
                                     aria-level={node.depth + 1}
                                     aria-expanded={row.hasChildren ? !row.isCollapsed : undefined}
+                                    aria-selected={isSelected}
+                                    // Only a slice of the tree is in the DOM at
+                                    // any time, so without these a screen reader
+                                    // announces "1 of 30" for a 12,000-node tree.
+                                    aria-setsize={flatRows.length}
+                                    aria-posinset={virtualRow.index + 1}
                                     tabIndex={node.id === rovingNodeId ? 0 : -1}
                                     title={node.label}
-                                    onClick={() => onJumpToSourceLine(node.sourceLineIndex)}
+                                    onClick={() => onSelectNode(node.id)}
+                                    onDoubleClick={() => selectAndJump(node)}
                                     onFocus={() => setFocusedNodeId(node.id)}
                                     onKeyDown={(event) => handleRowKeyDown(event, row, virtualRow.index)}
                                     className={`
-                                        absolute left-0 top-0 grid w-full cursor-pointer select-none items-center
-                                        grid-cols-[minmax(0,1fr)_3rem_4.5rem_4.5rem]
-                                        outline-none hover:bg-muted/50
+                                        group absolute left-0 top-0 grid w-full cursor-default select-none items-center
+                                        ${TREE_GRID_COLUMNS} outline-none transition-colors
                                         focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-emerald-500
+                                        ${isSelected ? 'bg-emerald-500/10' : 'hover:bg-muted/50'}
                                     `}
                                     style={{
                                         height: `${lineHeightPx}px`,
@@ -397,26 +458,33 @@ function LogCallTree({
                                         className={`flex min-w-0 items-center gap-1.5 ${kindClassName}`}
                                         style={{ paddingLeft: `${indentPx}px` }}
                                     >
-                                        <button
-                                            type="button"
-                                            tabIndex={-1}
-                                            aria-hidden={!row.hasChildren}
-                                            aria-label={row.isCollapsed ? `Expand ${node.label}` : `Collapse ${node.label}`}
-                                            onClick={(event) => {
-                                                event.stopPropagation();
-                                                onToggleCollapsed(node.id);
-                                            }}
-                                            className={`
-                                                flex size-4 shrink-0 items-center justify-center rounded
-                                                text-muted-foreground hover:text-primary
-                                                ${row.hasChildren ? '' : 'invisible'}
-                                            `}
-                                        >
-                                            <ChevronRight
-                                                size={12}
-                                                className={`transition-transform duration-150 ${row.isCollapsed ? '' : 'rotate-90'}`}
-                                            />
-                                        </button>
+                                        {/* A leaf renders an inert spacer rather
+                                            than an invisible button: aria-hidden
+                                            on a focusable control is an a11y
+                                            violation, and there's nothing to
+                                            toggle anyway. */}
+                                        {row.hasChildren ? (
+                                            <button
+                                                type="button"
+                                                tabIndex={-1}
+                                                aria-label={row.isCollapsed ? `Expand ${node.label}` : `Collapse ${node.label}`}
+                                                onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    onToggleCollapsed(node.id);
+                                                }}
+                                                className="
+                                                    flex size-4 shrink-0 cursor-pointer items-center justify-center
+                                                    rounded text-muted-foreground hover:text-primary
+                                                "
+                                            >
+                                                <ChevronRight
+                                                    size={12}
+                                                    className={`transition-transform duration-150 ${row.isCollapsed ? '' : 'rotate-90'}`}
+                                                />
+                                            </button>
+                                        ) : (
+                                            <span aria-hidden="true" className="size-4 shrink-0" />
+                                        )}
 
                                         {/* bg-current picks up the kind colour from the wrapper,
                                             so the dot can never drift from the text colour. */}
@@ -425,14 +493,42 @@ function LogCallTree({
                                         <span className="min-w-0 truncate">{node.label}</span>
 
                                         {node.callCount > 1 && (
-                                            <span className="shrink-0 rounded bg-muted px-1 text-[10px] font-medium tabular-nums text-muted-foreground">
+                                            <span
+                                                title={`Called ${node.callCount} times from this line`}
+                                                className="shrink-0 rounded bg-muted px-1 text-[10px] font-medium tabular-nums text-muted-foreground"
+                                            >
                                                 ×{node.callCount}
                                             </span>
                                         )}
+
+                                        {/* Jumping to the raw log is the one action here that
+                                            takes you out of the tree, so it gets its own
+                                            control instead of riding on the row click - which
+                                            previously made simply reading a row a navigation. */}
+                                        <button
+                                            type="button"
+                                            tabIndex={-1}
+                                            title="Show this frame in the raw log"
+                                            aria-label={`Show ${node.label} in the raw log`}
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                selectAndJump(node);
+                                            }}
+                                            className="
+                                                ml-auto flex size-5 shrink-0 cursor-pointer items-center justify-center
+                                                rounded text-muted-foreground opacity-0 transition-opacity
+                                                hover:bg-muted hover:text-primary
+                                                focus-visible:opacity-100 focus-visible:outline-none
+                                                focus-visible:ring-1 focus-visible:ring-emerald-500
+                                                group-hover:opacity-100 group-focus-visible:opacity-100
+                                            "
+                                        >
+                                            <ArrowRightToLine size={12} />
+                                        </button>
                                     </div>
 
-                                    <div className="pr-2 text-right text-[11px] tabular-nums text-muted-foreground/70">
-                                        {node.rowCount !== null ? `${node.rowCount}r` : ''}
+                                    <div className="pr-2 text-right text-[11px] tabular-nums text-muted-foreground">
+                                        {node.rowCount !== null ? node.rowCount.toLocaleString() : ''}
                                     </div>
 
                                     <div
