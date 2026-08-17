@@ -22,12 +22,12 @@ const persistLogRead = (logId: string, readAt: string) => {
         return;
     }
 
-    void sendWorkerRequest({
+    sendWorkerRequest({
         type: 'MARK_LOG_READ',
         orgId,
         logId,
         readAt
-    });
+    }).catch(() => {});
 }
 
 

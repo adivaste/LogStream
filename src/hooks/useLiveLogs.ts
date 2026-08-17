@@ -82,11 +82,11 @@ export const useLiveLogs = () => {
             return;
         }
 
-        void sendWorkerRequest({
+        sendWorkerRequest({
             type: 'SET_LIVE_POLLING',
             orgId,
             enabled: isLiveStreamOn
-        });
+        }).catch(() => {});
     }, [isLiveStreamOn, orgId]);
 
     React.useEffect(() => {
@@ -418,11 +418,11 @@ export const useLiveLogs = () => {
             lastActivityAtRef.current = Date.now();
 
             if (orgId) {
-                void sendWorkerRequest({
+                sendWorkerRequest({
                     type: 'USER_ACTIVITY_HEARTBEAT',
                     orgId,
                     occurredAt: new Date().toISOString()
-                });
+                }).catch(() => {});
             }
 
             if (!isIdleRef.current) {

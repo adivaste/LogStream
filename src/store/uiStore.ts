@@ -117,10 +117,12 @@ export const useUIStore = create<UIState>((set, get) => ({
         // `chrome.alarms` schedule, which can't read this store or
         // localStorage - sync it explicitly so both contexts agree.
         if (typeof polling.pollIntervalMs === 'number') {
-            void sendWorkerRequest({
+            // Best-effort sync - a dormant/dying service worker shouldn't
+            // surface as an unhandled rejection for a background settings sync.
+            sendWorkerRequest({
                 type: 'SET_LIVE_POLL_INTERVAL_MS',
                 pollIntervalMs: polling.pollIntervalMs
-            });
+            }).catch(() => {});
         }
     },
     updateLogBodyPreferences: (logBody) => {

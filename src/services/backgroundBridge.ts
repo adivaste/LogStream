@@ -46,13 +46,18 @@ const sendChromeRuntimeMessage = (request: WorkerRequest) => {
 export const sendWorkerRequest = async (
     request: WorkerRequest
 ): Promise<WorkerResponse> => {
-    if (canUseChromeRuntime()) {
-        try {
-            return await sendChromeRuntimeMessage(request);
-        } catch {
-            return handleLocalWorkerRequest(request);
-        }
+    // The local/mock backend only exists to power the plain `npm run dev`
+    // preview (no `chrome` API at all, so there's no real worker to talk
+    // to) - it must never be a fallback for a *real* messaging failure once
+    // the chrome runtime is actually present. The service worker going
+    // dormant or dying mid-message ("Extension context invalidated", an
+    // MV3 eviction, an in-progress extension update) is routine in an
+    // installed extension, not rare - silently swapping to fabricated mock
+    // data on that failure would show the user plausible-looking logs that
+    // are simply wrong, with no error surfaced at all.
+    if (!canUseChromeRuntime()) {
+        return handleLocalWorkerRequest(request);
     }
 
-    return handleLocalWorkerRequest(request);
+    return sendChromeRuntimeMessage(request);
 }
