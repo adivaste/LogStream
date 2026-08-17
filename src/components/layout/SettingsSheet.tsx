@@ -253,7 +253,12 @@ export const SettingsSheet = () => {
                         <TabsTrigger value="cleanup">Cleanup</TabsTrigger>
                     </TabsList>
 
-                    <div className="max-h-[55vh] overflow-y-auto">
+                    {/* Fixed height, not max-height - the Cleanup tab (donut +
+                        stat rows + a field) is taller than General (one
+                        switch), so a max-height would let the dialog itself
+                        grow/shrink on every tab switch instead of the tab
+                        panel just scrolling within a stable frame. */}
+                    <div className="h-[22rem] overflow-y-auto">
                         <TabsContent value="general" className="flex flex-col gap-2">
                             <label className="flex items-center justify-between gap-3 py-1">
                                 <span className="text-sm text-foreground">Show insights section</span>
