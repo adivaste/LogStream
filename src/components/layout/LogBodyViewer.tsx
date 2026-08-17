@@ -4,6 +4,7 @@ import React from "react";
 
 import { ScrollArea, ScrollAreaScrollbar, ScrollAreaViewport } from "@/components/ui/scroll-area";
 import { useElementScrollEdges } from "@/hooks/useScrollEdgeFade";
+import { getNextLogIndex } from "@/lib/logListConfig";
 
 const LOG_LINE_HEIGHT = 24;
 const LOG_VIEWER_OVERSCAN = 24;
@@ -147,6 +148,15 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
     // render (when `visibleLineIndexes` reflects "all") before it has a real
     // virtual row to scroll to.
     const pendingPinScrollRef = React.useRef<number | null>(null);
+    // Roving-tabindex keyboard navigation (same model LogList's rows use):
+    // exactly one row is ever a real tab stop, arrows move it instead of the
+    // browser's own Tab order, so a keyboard user can enter the log body,
+    // walk it line by line, and use native Shift+arrow/Ctrl+A text selection
+    // once a line has real DOM focus - no custom caret or selection model
+    // needed for that part, the browser already does it once focus lands.
+    const [focusedSourceLineIndex, setFocusedSourceLineIndex] = React.useState<number | null>(null);
+    const rowRefs = React.useRef<Record<number, HTMLDivElement | null>>({});
+    const pendingFocusSourceIndexRef = React.useRef<number | null>(null);
     const scrollEdges = useElementScrollEdges(scrollParentRef);
 
     const lines = React.useMemo(() => {
@@ -456,6 +466,73 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
         }
     }, [activePinIndex, scrollToPinnedSourceIndex, sortedPinnedLines]);
 
+    const setRowRef = React.useCallback((sourceIndex: number, element: HTMLDivElement | null) => {
+        rowRefs.current[sourceIndex] = element;
+    }, []);
+
+    const focusMountedRow = React.useCallback((sourceIndex: number) => {
+        requestAnimationFrame(() => {
+            const rowElement = rowRefs.current[sourceIndex];
+
+            if (!rowElement) {
+                return;
+            }
+
+            rowElement.focus({ preventScroll: true });
+        });
+    }, []);
+
+    // Same two-step pattern LogList's row navigation uses: virtualization
+    // means the target row may not exist in the DOM the instant scrollToIndex
+    // is called, so the immediate rAF focus attempt above can miss - this
+    // effect re-attempts once the row actually renders (watches `virtualLines`,
+    // which changes whenever the visible set of mounted rows does).
+    React.useEffect(() => {
+        const pendingSourceIndex = pendingFocusSourceIndexRef.current;
+
+        if (pendingSourceIndex === null || !rowRefs.current[pendingSourceIndex]) {
+            return;
+        }
+
+        pendingFocusSourceIndexRef.current = null;
+        focusMountedRow(pendingSourceIndex);
+    }, [focusMountedRow, virtualLines]);
+
+    const focusLineAtVisibleIndex = React.useCallback((visibleIndex: number) => {
+        const sourceIndex = getSourceLineIndex(visibleIndex);
+
+        setFocusedSourceLineIndex(sourceIndex);
+        pendingFocusSourceIndexRef.current = sourceIndex;
+        lineVirtualizer.scrollToIndex(visibleIndex, { align: 'auto' });
+        focusMountedRow(sourceIndex);
+    }, [focusMountedRow, getSourceLineIndex, lineVirtualizer]);
+
+    const handleRowKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>, sourceIndex: number) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            onTogglePinnedLine(sourceIndex);
+            return;
+        }
+
+        const currentVisibleIndex = visibleIndexBySourceIndex?.get(sourceIndex) ?? sourceIndex;
+        const nextVisibleIndex = getNextLogIndex({
+            currentIndex: currentVisibleIndex,
+            key: event.key,
+            totalLogs: visibleLineCount
+        });
+
+        if (nextVisibleIndex === currentVisibleIndex) {
+            return;
+        }
+
+        event.preventDefault();
+        focusLineAtVisibleIndex(nextVisibleIndex);
+    }, [focusLineAtVisibleIndex, onTogglePinnedLine, visibleIndexBySourceIndex, visibleLineCount]);
+
+    const handleRowFocus = React.useCallback((sourceIndex: number) => {
+        setFocusedSourceLineIndex(sourceIndex);
+    }, []);
+
     const handleCopyFullLog = React.useCallback(async () => {
         await navigator.clipboard.writeText(body);
         showCopyFeedback();
@@ -485,6 +562,17 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
     const getFilterButtonClassName = (filter: LogViewFilter) => {
         return getActionButtonClassName(viewFilter === filter);
     }
+
+    // The one row that's Tab-reachable. Falls back to the first visible line
+    // whenever the previously-focused line isn't part of the current
+    // debug/executable filter - otherwise toggling the filter could leave zero
+    // rows with tabIndex 0, making the log body impossible to Tab back into.
+    const isFocusedLineVisible = focusedSourceLineIndex !== null && (
+        !visibleIndexBySourceIndex || visibleIndexBySourceIndex.has(focusedSourceLineIndex)
+    );
+    const rovingSourceLineIndex = isFocusedLineVisible
+        ? focusedSourceLineIndex
+        : getSourceLineIndex(0);
 
     return (
         <section className="relative flex min-h-0 flex-1 flex-col border-t border-border">
@@ -603,13 +691,24 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
                                 <div
                                     key={virtualLine.key}
                                     data-index={virtualLine.index}
-                                    ref={isWrapEnabled ? lineVirtualizer.measureElement : undefined}
+                                    ref={(element) => {
+                                        setRowRef(sourceLineIndex, element);
+
+                                        if (isWrapEnabled) {
+                                            lineVirtualizer.measureElement(element);
+                                        }
+                                    }}
+                                    tabIndex={sourceLineIndex === rovingSourceLineIndex ? 0 : -1}
+                                    aria-label={`Line ${lineNumber}`}
+                                    onKeyDown={(event) => handleRowKeyDown(event, sourceLineIndex)}
+                                    onFocus={() => handleRowFocus(sourceLineIndex)}
                                     className={`
                                         absolute left-0 top-0 grid
                                         ${isWrapEnabled
                                     ? 'w-full grid-cols-[4.5rem_minmax(0,1fr)] items-start'
                                     : 'min-w-full grid-cols-[4.5rem_max-content] whitespace-pre'}
                                         ${isActiveMatchLine ? 'bg-orange-500/10' : isPinned ? 'bg-emerald-500/10' : ''}
+                                        outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-emerald-500
                                     `}
                                     style={{
                                         // Fixed-height rows are cheap to position with a fixed height;
