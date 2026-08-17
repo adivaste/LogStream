@@ -283,5 +283,76 @@ export const salesforceClient = {
         await assertResponseOk(response);
 
         return response.text();
+    },
+
+    // Log bodies are the one response in this client large enough (up to
+    // several MB) that a user benefits from knowing it's still moving rather
+    // than staring at an indefinite spinner - every other tooling call here
+    // returns a small JSON payload where progress reporting would be noise.
+    // `response.text()` can't report progress mid-flight, so this reads the
+    // stream manually and decodes once at the end (rather than per-chunk)
+    // to avoid splitting a multi-byte UTF-8 character across chunk
+    // boundaries.
+    async toolingTextWithProgress(
+        path: string,
+        onProgress: (_receivedBytes: number, _totalBytes: number | null) => void
+    ) {
+        const session = sessionStore.get() ?? await sessionStore.restore();
+
+        if (!session) {
+            throw new Error('No Salesforce session is available.');
+        }
+
+        const url = new URL(
+            `/services/data/v${session.apiVersion}/tooling/${path.replace(/^\//, '')}`,
+            session.instanceUrl
+        );
+
+        const response = await fetch(url.toString(), {
+            headers: {
+                Authorization: `Bearer ${session.sessionId}`,
+                Accept: 'text/plain'
+            }
+        });
+
+        await assertResponseOk(response);
+
+        // Salesforce doesn't always send Content-Length (edge-transformed
+        // responses can be chunked) - callers get `null` and can still show
+        // "X received so far" without a percentage.
+        const totalBytesHeader = response.headers.get('Content-Length');
+        const totalBytes = totalBytesHeader ? Number(totalBytesHeader) : null;
+
+        if (!response.body) {
+            const text = await response.text();
+            onProgress(text.length, totalBytes);
+            return text;
+        }
+
+        const reader = response.body.getReader();
+        const chunks: Uint8Array[] = [];
+        let receivedBytes = 0;
+
+        while (true) {
+            const { done, value } = await reader.read();
+
+            if (done) {
+                break;
+            }
+
+            chunks.push(value);
+            receivedBytes += value.byteLength;
+            onProgress(receivedBytes, totalBytes);
+        }
+
+        const combined = new Uint8Array(receivedBytes);
+        let offset = 0;
+
+        for (const chunk of chunks) {
+            combined.set(chunk, offset);
+            offset += chunk.byteLength;
+        }
+
+        return new TextDecoder('utf-8').decode(combined);
     }
 };

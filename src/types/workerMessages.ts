@@ -285,6 +285,13 @@ export type WorkerEvent =
         logId: SalesforceLogId;
     }
     | {
+        event: 'LOG_BODY_DOWNLOAD_PROGRESS';
+        orgId: SalesforceOrgId;
+        logId: SalesforceLogId;
+        receivedBytes: number;
+        totalBytes: number | null;
+    }
+    | {
         event: 'LOG_BODY_STATUS_CHANGED';
         orgId: SalesforceOrgId;
         logId: SalesforceLogId;

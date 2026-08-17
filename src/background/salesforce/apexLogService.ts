@@ -1,5 +1,6 @@
 import { logRepository } from "@/background/db/logRepository";
 import { logBodyRepository } from "@/background/db/logBodyRepository";
+import { broadcastWorkerEvent } from "@/background/broadcast";
 import { countLogBodyLines, getErrorLineNumbers } from "@/lib/logBodyMeta";
 import { salesforceClient } from "./salesforceClient";
 import type {
@@ -28,6 +29,11 @@ type UserRecord = {
 }
 
 const userNameCache = new Map<string, string>();
+// How often progress events are allowed to fire during a single log body
+// download - `getReader().read()` can resolve many times a second for a
+// large log, and nothing downstream needs updates faster than this to feel
+// live.
+const DOWNLOAD_PROGRESS_BROADCAST_INTERVAL_MS = 150;
 
 const RECENT_APEX_LOG_QUERY = [
     'SELECT Id, LogUserId, LogLength, StartTime, Status, Operation, Request, Application, DurationMilliseconds',
@@ -277,10 +283,30 @@ export const apexLogService = {
         }
 
         let body: string;
+        let lastBroadcastAt = 0;
 
         try {
-            body = await salesforceClient.toolingText(
-                `/sobjects/ApexLog/${logId}/Body/`
+            body = await salesforceClient.toolingTextWithProgress(
+                `/sobjects/ApexLog/${logId}/Body/`,
+                (receivedBytes, totalBytes) => {
+                    const now = Date.now();
+                    // Always let the very first progress event through (0ms
+                    // since the throttle "last" time starts at 0) so the UI
+                    // knows a download has started even for a log that
+                    // finishes in a single chunk.
+                    if (now - lastBroadcastAt < DOWNLOAD_PROGRESS_BROADCAST_INTERVAL_MS) {
+                        return;
+                    }
+
+                    lastBroadcastAt = now;
+                    broadcastWorkerEvent({
+                        event: 'LOG_BODY_DOWNLOAD_PROGRESS',
+                        orgId: session.orgId,
+                        logId,
+                        receivedBytes,
+                        totalBytes
+                    });
+                }
             );
         } catch (error) {
             // Salesforce purges ApexLog bodies once the org's debug log storage
