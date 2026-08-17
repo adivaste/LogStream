@@ -9,18 +9,31 @@ import {
     Copy,
     Download,
     Gauge,
+    Hash,
     MoreHorizontal,
+    Pin,
+    Regex,
     Search,
     WrapText,
-    X
+    X,
+    ZoomIn,
+    ZoomOut
 } from "lucide-react";
 import React from "react";
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea, ScrollAreaScrollbar, ScrollAreaViewport } from "@/components/ui/scroll-area";
 import { useElementScrollEdges } from "@/hooks/useScrollEdgeFade";
+import {
+    DEFAULT_LOG_BODY_FONT_SIZE_PX,
+    MAX_LOG_BODY_FONT_SIZE_PX,
+    MIN_LOG_BODY_FONT_SIZE_PX
+} from "@/lib/appPreferences";
 import { getErrorLineNumbers, parseLimitUsage } from "@/lib/logBodyMeta";
 import { getNextLogIndex } from "@/lib/logListConfig";
+import { useUIStore } from "@/store/uiStore";
+
+const FONT_SIZE_STEP_PX = 1;
 
 const LOG_LINE_HEIGHT = 24;
 const LOG_VIEWER_OVERSCAN = 24;
@@ -76,12 +89,64 @@ const getApexTokenClassName = (token: string) => {
     return 'text-violet-700 dark:text-violet-300';
 }
 
-const splitBySearchTerm = (text: string, searchQuery: string) => {
+// Compiles the user's query once per render pass rather than per line - a
+// bad regex (unbalanced group, trailing backslash) throws at compile time,
+// so callers get `null` back and fall through to treating the query as a
+// plain literal instead of breaking the whole log body.
+const compileSearchPattern = (searchQuery: string, isRegexEnabled: boolean): RegExp | null => {
     if (!searchQuery) {
-        return [text];
+        return null;
     }
 
-    const chunks: string[] = [];
+    if (!isRegexEnabled) {
+        return null;
+    }
+
+    try {
+        return new RegExp(searchQuery, 'gi');
+    } catch {
+        return null;
+    }
+}
+
+type SearchChunk = { text: string; isMatch: boolean };
+
+// Returns chunks tagged with whether each one IS a match, rather than making
+// callers re-test each chunk against the pattern afterward - re-testing would
+// mean compiling a fresh anchored RegExp per chunk, per line, on every render.
+const splitBySearchTerm = (text: string, searchQuery: string, searchPattern: RegExp | null): SearchChunk[] => {
+    if (!searchQuery) {
+        return [{ text, isMatch: false }];
+    }
+
+    if (searchPattern) {
+        const chunks: SearchChunk[] = [];
+        let cursor = 0;
+        searchPattern.lastIndex = 0;
+        let match = searchPattern.exec(text);
+
+        while (match) {
+            if (match.index > cursor) {
+                chunks.push({ text: text.slice(cursor, match.index), isMatch: false });
+            }
+
+            // A zero-length match (e.g. `a*`) would otherwise loop forever -
+            // treat it as a one-character match and keep advancing.
+            const matchText = match[0].length > 0 ? match[0] : (text[match.index] ?? '');
+            chunks.push({ text: matchText, isMatch: true });
+            cursor = match.index + Math.max(matchText.length, 1);
+            searchPattern.lastIndex = cursor;
+            match = searchPattern.exec(text);
+        }
+
+        if (cursor < text.length) {
+            chunks.push({ text: text.slice(cursor), isMatch: false });
+        }
+
+        return chunks;
+    }
+
+    const chunks: SearchChunk[] = [];
     let cursor = 0;
     const lowerText = text.toLowerCase();
     const lowerSearchQuery = searchQuery.toLowerCase();
@@ -89,22 +154,22 @@ const splitBySearchTerm = (text: string, searchQuery: string) => {
 
     while (matchIndex >= 0) {
         if (matchIndex > cursor) {
-            chunks.push(text.slice(cursor, matchIndex));
+            chunks.push({ text: text.slice(cursor, matchIndex), isMatch: false });
         }
 
-        chunks.push(text.slice(matchIndex, matchIndex + searchQuery.length));
+        chunks.push({ text: text.slice(matchIndex, matchIndex + searchQuery.length), isMatch: true });
         cursor = matchIndex + searchQuery.length;
         matchIndex = lowerText.indexOf(lowerSearchQuery, cursor);
     }
 
     if (cursor < text.length) {
-        chunks.push(text.slice(cursor));
+        chunks.push({ text: text.slice(cursor), isMatch: false });
     }
 
     return chunks;
 }
 
-const renderHighlightedLine = (line: string, searchQuery: string) => {
+const renderHighlightedLine = (line: string, searchQuery: string, searchPattern: RegExp | null) => {
     const apexParts = line.split(APEX_TOKEN_PATTERN);
 
     return apexParts.map((part, partIndex) => {
@@ -112,10 +177,7 @@ const renderHighlightedLine = (line: string, searchQuery: string) => {
             ? getApexTokenClassName(part)
             : '';
 
-        return splitBySearchTerm(part, searchQuery).map((chunk, chunkIndex) => {
-            const isSearchMatch = Boolean(searchQuery)
-                && chunk.toLowerCase() === searchQuery.toLowerCase();
-
+        return splitBySearchTerm(part, searchQuery, searchPattern).map(({ text: chunk, isMatch: isSearchMatch }, chunkIndex) => {
             return (
                 <span
                     key={`${partIndex}-${chunkIndex}`}
@@ -137,6 +199,7 @@ const isExecutableLine = (line: string) => {
 }
 
 function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClearPinnedLines }: LogBodyViewerProps) {
+    const sectionRef = React.useRef<HTMLElement | null>(null);
     const scrollParentRef = React.useRef<HTMLDivElement | null>(null);
     const charWidthProbeRef = React.useRef<HTMLSpanElement | null>(null);
     const copyFeedbackTimeoutRef = React.useRef<number | null>(null);
@@ -156,16 +219,64 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
     // by a line, and only for the rare row with unusually long/short words.
     const charWidthPxRef = React.useRef(LOG_LINE_HEIGHT * 0.42);
     const contentWidthPxRef = React.useRef(0);
+    const logBodyPreferences = useUIStore(state => state.logBodyPreferences);
+    const updateLogBodyPreferences = useUIStore(state => state.updateLogBodyPreferences);
     const [searchQuery, setSearchQuery] = React.useState('');
+    const [isRegexEnabled, setIsRegexEnabled] = React.useState(false);
     const [activeMatchIndex, setActiveMatchIndex] = React.useState(-1);
-    const [viewFilter, setViewFilter] = React.useState<LogViewFilter>('all');
-    const [isWrapEnabled, setIsWrapEnabled] = React.useState(false);
+    // Wrap/filter/font-size are global user preferences (not per-log), so the
+    // store is the source of truth - local state here only exists because a
+    // handful of derived values (estimateSize, filtering) need a plain value
+    // to read synchronously rather than a store subscription in a memo dep.
+    const [viewFilter, setViewFilterState] = React.useState<LogViewFilter>(logBodyPreferences.viewFilter);
+    const [isWrapEnabled, setIsWrapEnabledState] = React.useState(logBodyPreferences.wrapEnabled);
+    const [fontSizePx, setFontSizePxState] = React.useState(logBodyPreferences.fontSizePx);
     const [isCopyFeedbackVisible, setIsCopyFeedbackVisible] = React.useState(false);
     const [isDownloadFeedbackVisible, setIsDownloadFeedbackVisible] = React.useState(false);
+    const [isPinCopyFeedbackVisible, setIsPinCopyFeedbackVisible] = React.useState(false);
     const [activePinIndex, setActivePinIndex] = React.useState(-1);
     const [activeErrorIndex, setActiveErrorIndex] = React.useState(-1);
     const [isLimitSummaryOpen, setIsLimitSummaryOpen] = React.useState(false);
     const [isMoreMenuOpen, setIsMoreMenuOpen] = React.useState(false);
+    const [goToLineQuery, setGoToLineQuery] = React.useState('');
+    const [activeGoToLineIndex, setActiveGoToLineIndex] = React.useState(-1);
+    // Pins and errors used to render as two separate floating bars (bottom-
+    // right/bottom-left) - one consolidated bar reads cleaner, with an icon
+    // to flip which line-set it's navigating when both exist on this log.
+    // Lazily default to whichever set is more likely non-empty on first
+    // render (errors, when there are no pins yet) - avoids a one-frame flash
+    // where the bar shows "pins" with a "-/0" count before the
+    // empty-set-correction effect below flips it to errors.
+    const [navigatorMode, setNavigatorMode] = React.useState<'pins' | 'errors'>(
+        () => pinnedLines.length > 0 ? 'pins' : 'errors'
+    );
+
+    const setViewFilter = React.useCallback((next: LogViewFilter | ((_prev: LogViewFilter) => LogViewFilter)) => {
+        setViewFilterState(prev => {
+            const resolved = typeof next === 'function' ? next(prev) : next;
+            updateLogBodyPreferences({ viewFilter: resolved });
+            return resolved;
+        });
+    }, [updateLogBodyPreferences]);
+
+    const setIsWrapEnabled = React.useCallback((next: boolean | ((_prev: boolean) => boolean)) => {
+        setIsWrapEnabledState(prev => {
+            const resolved = typeof next === 'function' ? next(prev) : next;
+            updateLogBodyPreferences({ wrapEnabled: resolved });
+            return resolved;
+        });
+    }, [updateLogBodyPreferences]);
+
+    const setFontSizePx = React.useCallback((next: number | ((_prev: number) => number)) => {
+        setFontSizePxState(prev => {
+            const resolved = Math.min(
+                MAX_LOG_BODY_FONT_SIZE_PX,
+                Math.max(MIN_LOG_BODY_FONT_SIZE_PX, typeof next === 'function' ? next(prev) : next)
+            );
+            updateLogBodyPreferences({ fontSizePx: resolved });
+            return resolved;
+        });
+    }, [updateLogBodyPreferences]);
     // Set when a pinned/error line is hidden by the current debug/executable
     // filter - navigating to it has to lift the filter first, then wait for
     // the next render (when `visibleLineIndexes` reflects "all") before it
@@ -245,8 +356,22 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
     const trimmedSearchQuery = searchQuery.trim();
     const deferredSearchQuery = React.useDeferredValue(trimmedSearchQuery);
 
+    const deferredSearchPattern = React.useMemo(
+        () => compileSearchPattern(deferredSearchQuery, isRegexEnabled),
+        [deferredSearchQuery, isRegexEnabled]
+    );
+    const isInvalidRegex = isRegexEnabled && Boolean(trimmedSearchQuery) && !deferredSearchPattern;
+
     const matchingLineIndexes = React.useMemo(() => {
         if (!deferredSearchQuery) {
+            return [];
+        }
+
+        // Regex mode with an unparsable pattern falls back to "no matches"
+        // rather than silently degrading to a literal-text search - that
+        // silent fallback would be more confusing than an empty result with
+        // the "invalid pattern" hint shown next to the search box.
+        if (isRegexEnabled && !deferredSearchPattern) {
             return [];
         }
 
@@ -261,20 +386,51 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
                 continue;
             }
 
-            if (line.toLowerCase().includes(lowerSearchQuery)) {
+            const isMatch = deferredSearchPattern
+                ? (deferredSearchPattern.lastIndex = 0, deferredSearchPattern.test(line))
+                : line.toLowerCase().includes(lowerSearchQuery);
+
+            if (isMatch) {
                 indexes.push(visibleIndex);
             }
         }
 
         return indexes;
-    }, [deferredSearchQuery, getSourceLineIndex, lines, visibleLineCount]);
+    }, [deferredSearchPattern, deferredSearchQuery, getSourceLineIndex, isRegexEnabled, lines, visibleLineCount]);
+
+    const trimmedGoToLineQuery = goToLineQuery.trim();
+
+    // Apex source line numbers (the `[47]` markers Salesforce embeds in
+    // METHOD_ENTRY/USER_DEBUG/etc. lines) rather than raw log line numbers -
+    // the same class line can execute many times (loops, repeated calls), so
+    // this is a multi-match navigator like pins/errors, not a single jump.
+    const goToLineSourceIndexes = React.useMemo(() => {
+        if (!trimmedGoToLineQuery || !/^\d+$/.test(trimmedGoToLineQuery)) {
+            return [];
+        }
+
+        const targetToken = `[${trimmedGoToLineQuery}]`;
+        const indexes: number[] = [];
+
+        lines.forEach((line, sourceIndex) => {
+            if (line.includes(targetToken)) {
+                indexes.push(sourceIndex);
+            }
+        });
+
+        return indexes;
+    }, [lines, trimmedGoToLineQuery]);
+
+    // Row height scales with the zoom level so wrapped-row estimates and
+    // fixed-row heights stay proportional to the actual rendered text size.
+    const lineHeightPx = Math.round(LOG_LINE_HEIGHT * (fontSizePx / DEFAULT_LOG_BODY_FONT_SIZE_PX));
 
     const lineVirtualizer = useVirtualizer({
         count: visibleLineCount,
         getScrollElement: () => scrollParentRef.current,
         estimateSize: (index) => {
             if (!isWrapEnabled) {
-                return LOG_LINE_HEIGHT;
+                return lineHeightPx;
             }
 
             const availableWidthPx = contentWidthPxRef.current - LOG_LINE_NUMBER_COLUMN_PX - LOG_CONTENT_PADDING_PX;
@@ -282,7 +438,7 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
             const line = lines[getSourceLineIndex(index)] ?? '';
             const wrappedLineCount = Math.max(1, Math.ceil(line.length / charsPerLine));
 
-            return wrappedLineCount * LOG_LINE_HEIGHT;
+            return wrappedLineCount * lineHeightPx;
         },
         overscan: LOG_VIEWER_OVERSCAN
     });
@@ -343,7 +499,7 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
         return () => {
             resizeObserver.disconnect();
         };
-    }, [isWrapEnabled, lineVirtualizer]);
+    }, [fontSizePx, isWrapEnabled, lineVirtualizer]);
 
     const activeMatchLineIndex = matchingLineIndexes[activeMatchIndex] ?? -1;
 
@@ -451,7 +607,7 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
         // jump once the next render has a real row for it (see effect below).
         pendingScrollRef.current = sourceIndex;
         setViewFilter('all');
-    }, [lineVirtualizer, visibleIndexBySourceIndex]);
+    }, [lineVirtualizer, setViewFilter, visibleIndexBySourceIndex]);
 
     React.useEffect(() => {
         const pendingSourceIndex = pendingScrollRef.current;
@@ -511,6 +667,50 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
             setActiveErrorIndex(errorSourceLineIndexes.length - 1);
         }
     }, [activeErrorIndex, errorSourceLineIndexes.length]);
+
+    React.useEffect(() => {
+        setActiveGoToLineIndex(-1);
+    }, [trimmedGoToLineQuery]);
+
+    const moveToGoToLine = React.useCallback((direction: 1 | -1) => {
+        if (goToLineSourceIndexes.length === 0) {
+            return;
+        }
+
+        setActiveGoToLineIndex(current => {
+            const nextIndex = current < 0
+                ? (direction === 1 ? 0 : goToLineSourceIndexes.length - 1)
+                : (current + direction + goToLineSourceIndexes.length) % goToLineSourceIndexes.length;
+
+            const sourceIndex = goToLineSourceIndexes[nextIndex];
+
+            if (sourceIndex !== undefined) {
+                scrollToSourceIndex(sourceIndex);
+            }
+
+            return nextIndex;
+        });
+    }, [goToLineSourceIndexes, scrollToSourceIndex]);
+
+    const handleGoToLineKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLInputElement>) => {
+        if (event.key !== 'Enter') {
+            return;
+        }
+
+        event.preventDefault();
+        moveToGoToLine(event.shiftKey ? -1 : 1);
+    }, [moveToGoToLine]);
+
+    // If the active mode's set empties out (last pin removed, or a fresh log
+    // with no errors) but the other one still has entries, fall back to it
+    // rather than showing a bar stuck on an empty list.
+    React.useEffect(() => {
+        if (navigatorMode === 'pins' && sortedPinnedLines.length === 0 && errorSourceLineIndexes.length > 0) {
+            setNavigatorMode('errors');
+        } else if (navigatorMode === 'errors' && errorSourceLineIndexes.length === 0 && sortedPinnedLines.length > 0) {
+            setNavigatorMode('pins');
+        }
+    }, [errorSourceLineIndexes.length, navigatorMode, sortedPinnedLines.length]);
 
     const moveToError = React.useCallback((direction: 1 | -1) => {
         if (errorSourceLineIndexes.length === 0) {
@@ -617,6 +817,83 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
         showDownloadFeedback();
     }, [body, fileName, showDownloadFeedback]);
 
+    const showPinCopyFeedback = React.useCallback(() => {
+        setIsPinCopyFeedbackVisible(true);
+        window.setTimeout(() => setIsPinCopyFeedbackVisible(false), 1200);
+    }, []);
+
+    const handleCopyPinnedLines = React.useCallback(async () => {
+        if (sortedPinnedLines.length === 0) {
+            return;
+        }
+
+        const text = sortedPinnedLines
+            .map(sourceIndex => `${sourceIndex + 1}: ${lines[sourceIndex] ?? ''}`)
+            .join('\n');
+
+        await navigator.clipboard.writeText(text);
+        showPinCopyFeedback();
+    }, [lines, showPinCopyFeedback, sortedPinnedLines]);
+
+    // Ctrl/Cmd+Shift+C (pinned lines) and Ctrl/Cmd+C on a focused, unselected
+    // row (that one line) both need to live above the global shortcut
+    // manager's bare-letter bindings (d/c/f/s...) - those fire on any
+    // non-editable target, including a focused log row, so this feature has
+    // to use modifier combos the global manager doesn't already claim.
+    // Scoped to focus being inside this log body's own DOM subtree - without
+    // that check, this previously hijacked Ctrl+Shift+C (Chrome's "Inspect
+    // Element") and the browser's native Ctrl+=/-/0 zoom shortcuts anywhere
+    // on the page for as long as any log was open, not just while a user was
+    // actually interacting with this component.
+    React.useEffect(() => {
+        const handleKeyDown = (event: KeyboardEvent) => {
+            const isModifierPressed = event.ctrlKey || event.metaKey;
+
+            if (!isModifierPressed) {
+                return;
+            }
+
+            if (!sectionRef.current?.contains(document.activeElement)) {
+                return;
+            }
+
+            if (event.key === 'c' || event.key === 'C') {
+                if (event.shiftKey) {
+                    event.preventDefault();
+                    void handleCopyPinnedLines();
+                    return;
+                }
+
+                if (
+                    focusedSourceLineIndex !== null
+                    && rowRefs.current[focusedSourceLineIndex] === document.activeElement
+                    && window.getSelection()?.isCollapsed !== false
+                ) {
+                    event.preventDefault();
+                    const line = lines[focusedSourceLineIndex] ?? '';
+                    void navigator.clipboard.writeText(line);
+                }
+
+                return;
+            }
+
+            if (event.key === '=' || event.key === '+') {
+                event.preventDefault();
+                setFontSizePx(size => size + FONT_SIZE_STEP_PX);
+            } else if (event.key === '-') {
+                event.preventDefault();
+                setFontSizePx(size => size - FONT_SIZE_STEP_PX);
+            } else if (event.key === '0') {
+                event.preventDefault();
+                setFontSizePx(DEFAULT_LOG_BODY_FONT_SIZE_PX);
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [focusedSourceLineIndex, handleCopyPinnedLines, lines, setFontSizePx]);
+
     const getActionButtonClassName = (isFeedbackVisible = false) => {
         return `
             rounded-md border-0 p-2 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500
@@ -642,7 +919,7 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
         : getSourceLineIndex(0);
 
     return (
-        <section className="relative flex min-h-0 flex-1 flex-col border-t border-border">
+        <section ref={sectionRef} className="relative flex min-h-0 flex-1 flex-col border-t border-border">
             <div className="flex items-center gap-2 border-b border-border px-4 py-2">
                 <div className="
                     flex h-8 min-w-0 flex-1 items-center gap-2 border-0 rounded-md bg-input/80 dark:bg-input/80 px-2
@@ -659,10 +936,52 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
                         className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground font-sans"
                     />
                     {trimmedSearchQuery && (
+                        <span
+                            title={isInvalidRegex ? 'Invalid regular expression' : undefined}
+                            className={`shrink-0 font-mono text-[11px] ${isInvalidRegex ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground'}`}
+                        >
+                            {isInvalidRegex
+                                ? 'Invalid regex'
+                                : matchingLineIndexes.length === 0
+                                    ? '0'
+                                    : `${Math.max(activeMatchIndex + 1, 0)}/${matchingLineIndexes.length}`}
+                        </span>
+                    )}
+                    <button
+                        type="button"
+                        title="Regex search"
+                        aria-label="Toggle regex search"
+                        aria-pressed={isRegexEnabled}
+                        onClick={() => setIsRegexEnabled(enabled => !enabled)}
+                        className={`
+                            shrink-0 rounded p-1
+                            ${isRegexEnabled ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground hover:text-primary'}
+                        `}
+                    >
+                        <Regex size={14} />
+                    </button>
+                </div>
+
+                <div className="
+                    flex h-8 w-32 shrink-0 items-center gap-1.5 border-0 rounded-md bg-input/80 dark:bg-input/80 px-2
+                    focus-within:ring-[2px] focus-within:ring-ring/40
+                ">
+                    <Hash size={14} className="shrink-0 text-muted-foreground" />
+                    <input
+                        type="text"
+                        inputMode="numeric"
+                        value={goToLineQuery}
+                        onChange={(event) => setGoToLineQuery(event.target.value)}
+                        onKeyDown={handleGoToLineKeyDown}
+                        placeholder="Apex line #"
+                        aria-label="Go to Apex source line number"
+                        className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground font-sans"
+                    />
+                    {trimmedGoToLineQuery && (
                         <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
-                            {matchingLineIndexes.length === 0
+                            {goToLineSourceIndexes.length === 0
                                 ? '0'
-                                : `${Math.max(activeMatchIndex + 1, 0)}/${matchingLineIndexes.length}`}
+                                : `${Math.max(activeGoToLineIndex + 1, 0)}/${goToLineSourceIndexes.length}`}
                         </span>
                     )}
                 </div>
@@ -739,7 +1058,7 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
                             More
                         </button>
                     </PopoverTrigger>
-                    <PopoverContent align="end" className="w-44 border-border bg-popover p-1 font-sans">
+                    <PopoverContent align="end" className="w-48 border-border bg-popover p-1 font-sans">
                         <button
                             type="button"
                             onClick={() => {
@@ -751,6 +1070,22 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
                             {isCopyFeedbackVisible ? <Check size={14} className="text-emerald-600 dark:text-emerald-400" /> : <Copy size={14} />}
                             {isCopyFeedbackVisible ? 'Copied' : 'Copy full log'}
                         </button>
+                        {sortedPinnedLines.length > 0 && (
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    void handleCopyPinnedLines();
+                                    setIsMoreMenuOpen(false);
+                                }}
+                                className="flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground hover:bg-muted"
+                            >
+                                <span className="flex items-center gap-2">
+                                    {isPinCopyFeedbackVisible ? <Check size={14} className="text-emerald-600 dark:text-emerald-400" /> : <Copy size={14} />}
+                                    {isPinCopyFeedbackVisible ? 'Copied' : 'Copy pinned lines'}
+                                </span>
+                                <span className="font-mono text-[10px] text-muted-foreground">Ctrl+Shift+C</span>
+                            </button>
+                        )}
                         <button
                             type="button"
                             onClick={() => {
@@ -762,6 +1097,39 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
                             {isDownloadFeedbackVisible ? <Check size={14} className="text-emerald-600 dark:text-emerald-400" /> : <Download size={14} />}
                             {isDownloadFeedbackVisible ? 'Downloaded' : 'Download log'}
                         </button>
+                        <div className="my-1 h-px bg-border" aria-hidden="true" />
+                        <div className="flex items-center justify-between gap-2 px-2 py-1">
+                            <span className="text-sm text-foreground">Zoom</span>
+                            <div className="flex items-center gap-1">
+                                <button
+                                    type="button"
+                                    title="Zoom out (Ctrl -)"
+                                    aria-label="Zoom out"
+                                    onClick={() => setFontSizePx(size => size - FONT_SIZE_STEP_PX)}
+                                    className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-primary"
+                                >
+                                    <ZoomOut size={14} />
+                                </button>
+                                <button
+                                    type="button"
+                                    title="Reset zoom (Ctrl 0)"
+                                    aria-label="Reset zoom"
+                                    onClick={() => setFontSizePx(DEFAULT_LOG_BODY_FONT_SIZE_PX)}
+                                    className="min-w-8 rounded px-1 text-center font-mono text-[11px] text-muted-foreground hover:bg-muted hover:text-primary"
+                                >
+                                    {fontSizePx}px
+                                </button>
+                                <button
+                                    type="button"
+                                    title="Zoom in (Ctrl +)"
+                                    aria-label="Zoom in"
+                                    onClick={() => setFontSizePx(size => size + FONT_SIZE_STEP_PX)}
+                                    className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-primary"
+                                >
+                                    <ZoomIn size={14} />
+                                </button>
+                            </div>
+                        </div>
                     </PopoverContent>
                 </Popover>
             </div>
@@ -875,8 +1243,9 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
                                         aria-label={isPinned ? `Unpin line ${lineNumber}` : `Pin line ${lineNumber}`}
                                         aria-pressed={isPinned}
                                         onClick={() => onTogglePinnedLine(sourceLineIndex)}
+                                        style={{ fontSize: `${fontSizePx}px`, lineHeight: `${lineHeightPx}px` }}
                                         className={`
-                                            sticky left-0 z-10 cursor-pointer select-none border-r pr-3 text-right text-sm leading-6
+                                            sticky left-0 z-10 cursor-pointer select-none border-r pr-3 text-right
                                             transition-colors
                                             ${isPinned
                                     ? 'border-border bg-emerald-500/10 font-medium text-emerald-700 dark:text-emerald-300'
@@ -888,9 +1257,10 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
                                         {lineNumber}
                                     </div>
                                     <div
-                                        className={`px-3 text-sm leading-6 text-muted-foreground ${isWrapEnabled ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'}`}
+                                        style={{ fontSize: `${fontSizePx}px`, lineHeight: `${lineHeightPx}px` }}
+                                        className={`px-3 text-muted-foreground ${isWrapEnabled ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'}`}
                                     >
-                                        {renderHighlightedLine(line, deferredSearchQuery)}
+                                        {renderHighlightedLine(line, deferredSearchQuery, deferredSearchPattern)}
                                     </div>
                                 </div>
                             );
@@ -910,73 +1280,77 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
                 <ScrollAreaScrollbar />
             </ScrollArea>
 
-            {/* Only rendered once something is actually pinned - no permanent
-                chrome for a feature that isn't in use on this log. */}
-            {sortedPinnedLines.length > 0 && (
-                <div className="absolute bottom-4 right-4 z-20 flex items-center gap-0.5 rounded-md border border-border bg-popover/95 p-1 shadow-lg backdrop-blur-sm">
-                    <button
-                        type="button"
-                        title="Previous pinned line"
-                        aria-label="Previous pinned line"
-                        onClick={() => moveToPin(-1)}
-                        className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-primary"
-                    >
-                        <ChevronUp size={14} />
-                    </button>
-                    <span className="min-w-8 px-1 text-center font-mono text-[11px] text-muted-foreground">
-                        {activePinIndex >= 0 ? activePinIndex + 1 : '-'}/{sortedPinnedLines.length}
-                    </span>
-                    <button
-                        type="button"
-                        title="Next pinned line"
-                        aria-label="Next pinned line"
-                        onClick={() => moveToPin(1)}
-                        className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-primary"
-                    >
-                        <ChevronDown size={14} />
-                    </button>
-                    <div className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
-                    <button
-                        type="button"
-                        title="Clear all pinned lines"
-                        aria-label="Clear all pinned lines"
-                        onClick={onClearPinnedLines}
-                        className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                    >
-                        <X size={14} />
-                    </button>
-                </div>
-            )}
+            {/* Only rendered once there's a pin or an error to navigate - no
+                permanent chrome for a feature that isn't in use on this log.
+                One bar, bottom-right, instead of separate pin/error bars -
+                the icon button flips which set is active when both exist. */}
+            {(sortedPinnedLines.length > 0 || errorSourceLineIndexes.length > 0) && (() => {
+                const isErrorMode = navigatorMode === 'errors' && errorSourceLineIndexes.length > 0;
+                const canToggleMode = sortedPinnedLines.length > 0 && errorSourceLineIndexes.length > 0;
+                const activeCount = isErrorMode ? errorSourceLineIndexes.length : sortedPinnedLines.length;
+                const activeIndex = isErrorMode ? activeErrorIndex : activePinIndex;
+                const moveToActive = isErrorMode ? moveToError : moveToPin;
 
-            {/* Bottom-left, mirroring the pin navigator's bottom-right spot -
-                errors are auto-detected rather than user-set, so there's no
-                clear-all control here, just previous/next. */}
-            {errorSourceLineIndexes.length > 0 && (
-                <div className="absolute bottom-4 left-4 z-20 flex items-center gap-0.5 rounded-md border border-red-500/30 bg-popover/95 p-1 shadow-lg backdrop-blur-sm">
-                    <AlertTriangle size={13} className="mx-1 text-red-600 dark:text-red-400" />
-                    <button
-                        type="button"
-                        title="Previous error"
-                        aria-label="Previous error"
-                        onClick={() => moveToError(-1)}
-                        className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-primary"
+                return (
+                    <div
+                        className={`
+                            absolute bottom-4 right-4 z-20 flex items-center gap-0.5 rounded-md border bg-popover/95
+                            p-1 shadow-lg backdrop-blur-sm
+                            ${isErrorMode ? 'border-red-500/30' : 'border-border'}
+                        `}
                     >
-                        <ChevronUp size={14} />
-                    </button>
-                    <span className="min-w-8 px-1 text-center font-mono text-[11px] text-muted-foreground">
-                        {activeErrorIndex >= 0 ? activeErrorIndex + 1 : '-'}/{errorSourceLineIndexes.length}
-                    </span>
-                    <button
-                        type="button"
-                        title="Next error"
-                        aria-label="Next error"
-                        onClick={() => moveToError(1)}
-                        className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-primary"
-                    >
-                        <ChevronDown size={14} />
-                    </button>
-                </div>
-            )}
+                        <button
+                            type="button"
+                            title={canToggleMode ? (isErrorMode ? 'Switch to pinned lines' : 'Switch to errors') : undefined}
+                            aria-label={canToggleMode ? (isErrorMode ? 'Switch to pinned lines' : 'Switch to errors') : (isErrorMode ? 'Errors' : 'Pinned lines')}
+                            disabled={!canToggleMode}
+                            onClick={() => setNavigatorMode(isErrorMode ? 'pins' : 'errors')}
+                            className={`
+                                rounded p-1
+                                ${isErrorMode ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400'}
+                                ${canToggleMode ? 'hover:bg-muted' : 'cursor-default'}
+                            `}
+                        >
+                            {isErrorMode ? <AlertTriangle size={13} /> : <Pin size={13} />}
+                        </button>
+                        <button
+                            type="button"
+                            title={isErrorMode ? 'Previous error' : 'Previous pinned line'}
+                            aria-label={isErrorMode ? 'Previous error' : 'Previous pinned line'}
+                            onClick={() => moveToActive(-1)}
+                            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-primary"
+                        >
+                            <ChevronUp size={14} />
+                        </button>
+                        <span className="min-w-8 px-1 text-center font-mono text-[11px] text-muted-foreground">
+                            {activeIndex >= 0 ? activeIndex + 1 : '-'}/{activeCount}
+                        </span>
+                        <button
+                            type="button"
+                            title={isErrorMode ? 'Next error' : 'Next pinned line'}
+                            aria-label={isErrorMode ? 'Next error' : 'Next pinned line'}
+                            onClick={() => moveToActive(1)}
+                            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-primary"
+                        >
+                            <ChevronDown size={14} />
+                        </button>
+                        {!isErrorMode && (
+                            <>
+                                <div className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
+                                <button
+                                    type="button"
+                                    title="Clear all pinned lines"
+                                    aria-label="Clear all pinned lines"
+                                    onClick={onClearPinnedLines}
+                                    className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                                >
+                                    <X size={14} />
+                                </button>
+                            </>
+                        )}
+                    </div>
+                );
+            })()}
         </section>
     );
 }

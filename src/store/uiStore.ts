@@ -3,6 +3,7 @@ import {
     type AppPreferences,
     applyThemePreference,
     initializeThemePreference,
+    persistLogBodyPreferences,
     persistPollingPreferences,
     persistShowInsightsPreference,
     persistThemePreference,
@@ -33,6 +34,8 @@ type UIState = {
     toggleInsightsVisible: () => void;
     pollingPreferences: AppPreferences['polling'];
     updatePollingPreferences: (_polling: Partial<AppPreferences['polling']>) => void;
+    logBodyPreferences: AppPreferences['logBody'];
+    updateLogBodyPreferences: (_logBody: Partial<AppPreferences['logBody']>) => void;
 
     // Salesforce Connection
     connectionInfo: SalesforceConnectionInfo | null;
@@ -79,6 +82,7 @@ export const useUIStore = create<UIState>((set, get) => ({
     theme: initializeThemePreference(),
     isInsightsVisible: readAppPreferences().preferences.showInsights,
     pollingPreferences: readAppPreferences().polling,
+    logBodyPreferences: readAppPreferences().logBody,
     connectionInfo: null,
     sessionDetectionState: 'detecting',
     isInitialSessionDetectionComplete: false,
@@ -118,6 +122,10 @@ export const useUIStore = create<UIState>((set, get) => ({
                 pollIntervalMs: polling.pollIntervalMs
             });
         }
+    },
+    updateLogBodyPreferences: (logBody) => {
+        const persisted = persistLogBodyPreferences(logBody);
+        set({ logBodyPreferences: persisted.logBody });
     },
     setConnectionInfo: (connectionInfo) => {
         rememberConnectedOrg(connectionInfo);

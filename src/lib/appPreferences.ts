@@ -11,6 +11,10 @@ const APP_PREFERENCES_STORAGE_KEY = 'logstream-preferences';
 const LEGACY_THEME_STORAGE_KEY = 'logstream-theme';
 const APP_PREFERENCES_VERSION = 1;
 
+export const DEFAULT_LOG_BODY_FONT_SIZE_PX = 13;
+export const MIN_LOG_BODY_FONT_SIZE_PX = 11;
+export const MAX_LOG_BODY_FONT_SIZE_PX = 19;
+
 export type StoredOrgPreference = {
     orgId: SalesforceOrgId;
     orgName: string | null;
@@ -37,6 +41,11 @@ export type AppPreferences = {
         sortBy: SortBy;
         sortDirection: SortDirection;
     };
+    logBody: {
+        wrapEnabled: boolean;
+        viewFilter: 'all' | 'debug' | 'executable';
+        fontSizePx: number;
+    };
     connection: {
         lastConnectedOrg: StoredOrgPreference | null;
         recentOrgs: StoredOrgPreference[];
@@ -60,6 +69,11 @@ export const DEFAULT_APP_PREFERENCES: AppPreferences = {
     logTable: {
         sortBy: SortBy.TIMESTAMP,
         sortDirection: SortDirection.DESC
+    },
+    logBody: {
+        wrapEnabled: false,
+        viewFilter: 'all',
+        fontSizePx: DEFAULT_LOG_BODY_FONT_SIZE_PX
     },
     connection: {
         lastConnectedOrg: null,
@@ -89,6 +103,17 @@ const isSortBy = (value: unknown): value is SortBy => {
 
 const isSortDirection = (value: unknown): value is SortDirection => {
     return Object.values(SortDirection).includes(value as SortDirection);
+}
+
+const isLogViewFilter = (value: unknown): value is AppPreferences['logBody']['viewFilter'] => {
+    return value === 'all' || value === 'debug' || value === 'executable';
+}
+
+const isFontSizeInRange = (value: unknown): value is number => {
+    return typeof value === 'number'
+        && Number.isFinite(value)
+        && value >= MIN_LOG_BODY_FONT_SIZE_PX
+        && value <= MAX_LOG_BODY_FONT_SIZE_PX;
 }
 
 const getBrowserStorage = () => {
@@ -145,6 +170,7 @@ const normalizePreferences = (value: unknown): AppPreferences => {
     const preferences = isObject(value.preferences) ? value.preferences : {};
     const polling = isObject(value.polling) ? value.polling : {};
     const logTable = isObject(value.logTable) ? value.logTable : {};
+    const logBody = isObject(value.logBody) ? value.logBody : {};
     const connection = isObject(value.connection) ? value.connection : {};
     const recentOrgs = Array.isArray(connection.recentOrgs)
         ? connection.recentOrgs
@@ -185,6 +211,17 @@ const normalizePreferences = (value: unknown): AppPreferences => {
             sortDirection: isSortDirection(logTable.sortDirection)
                 ? logTable.sortDirection
                 : DEFAULT_APP_PREFERENCES.logTable.sortDirection
+        },
+        logBody: {
+            wrapEnabled: isBoolean(logBody.wrapEnabled)
+                ? logBody.wrapEnabled
+                : DEFAULT_APP_PREFERENCES.logBody.wrapEnabled,
+            viewFilter: isLogViewFilter(logBody.viewFilter)
+                ? logBody.viewFilter
+                : DEFAULT_APP_PREFERENCES.logBody.viewFilter,
+            fontSizePx: isFontSizeInRange(logBody.fontSizePx)
+                ? logBody.fontSizePx
+                : DEFAULT_APP_PREFERENCES.logBody.fontSizePx
         },
         connection: {
             lastConnectedOrg: normalizeOrgPreference(connection.lastConnectedOrg),
@@ -303,6 +340,18 @@ export const persistPollingPreferences = (
         polling: {
             ...preferences.polling,
             ...polling
+        }
+    }));
+}
+
+export const persistLogBodyPreferences = (
+    logBody: Partial<AppPreferences['logBody']>
+) => {
+    return updateAppPreferences(preferences => ({
+        ...preferences,
+        logBody: {
+            ...preferences.logBody,
+            ...logBody
         }
     }));
 }
