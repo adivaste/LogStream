@@ -8,6 +8,7 @@ import { SettingsSheet } from './components/layout/SettingsSheet'
 import { Toaster } from './components/ui/sonner'
 import { Button } from './components/ui/button'
 import { ScrollArea, ScrollAreaScrollbar, ScrollAreaViewport } from './components/ui/scroll-area'
+import { useDelayedLoadingGate } from './hooks/useDelayedLoadingGate'
 import { useLiveLogs } from './hooks/useLiveLogs'
 import { useShortcutManager } from './hooks/useShortcutManager'
 import { connectSalesforceOrg } from './services/salesforceConnection'
@@ -34,45 +35,6 @@ function DetectingOrgScreen() {
     )
 }
 
-// Standard "avoid a loading-state flash" pattern: if the real screen is ready
-// before SHOW_DELAY_MS has passed, skip the loading screen entirely (nothing
-// renders in that brief window). If it takes longer and the loading screen
-// does get shown, keep it up for at least MIN_VISIBLE_MS so it never
-// flickers on and immediately back off within the same frame or two.
-const DETECTING_SCREEN_SHOW_DELAY_MS = 200;
-const DETECTING_SCREEN_MIN_VISIBLE_MS = 400;
-
-const useDelayedLoadingGate = (isComplete: boolean) => {
-    const [isVisible, setIsVisible] = React.useState(false);
-    const shownAtRef = React.useRef<number | null>(null);
-
-    React.useEffect(() => {
-        if (isComplete) {
-            return;
-        }
-
-        const showTimeoutId = window.setTimeout(() => {
-            shownAtRef.current = Date.now();
-            setIsVisible(true);
-        }, DETECTING_SCREEN_SHOW_DELAY_MS);
-
-        return () => window.clearTimeout(showTimeoutId);
-    }, [isComplete]);
-
-    React.useEffect(() => {
-        if (!isComplete || !isVisible) {
-            return;
-        }
-
-        const elapsed = Date.now() - (shownAtRef.current ?? Date.now());
-        const remaining = Math.max(0, DETECTING_SCREEN_MIN_VISIBLE_MS - elapsed);
-        const hideTimeoutId = window.setTimeout(() => setIsVisible(false), remaining);
-
-        return () => window.clearTimeout(hideTimeoutId);
-    }, [isComplete, isVisible]);
-
-    return isVisible;
-}
 
 function ConnectOrgGuide() {
     const setConnectionInfo = useUIStore(state => state.setConnectionInfo);

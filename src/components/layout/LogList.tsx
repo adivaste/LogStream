@@ -18,6 +18,7 @@ import {
     formatLogDuration,
     filterLogs
 } from "@/lib/logListConfig";
+import { useDelayedLoadingGate } from "@/hooks/useDelayedLoadingGate";
 import type { UseLiveLogsResult } from "@/hooks/useLiveLogs";
 import { useElementScrollEdges } from "@/hooks/useScrollEdgeFade";
 import { useTableUIStore } from "@/store/tableUIStore";
@@ -211,6 +212,13 @@ function LogList({
 }: LogListProps) {
 
     const lastOlderLoadAttemptKeyRef = React.useRef<string | null>(null);
+    // Gates only the skeleton's visibility - a cache-hit that resolves in a
+    // couple frames shouldn't flash a skeleton at all, and if it does show
+    // (a genuinely slow load), it should hold for a beat rather than swap to
+    // content one frame later. `isLoading` itself stays ungated everywhere
+    // else below (the older-logs guard, effect deps) since those need the
+    // real, immediate value, not a debounced display-only one.
+    const shouldShowLoadingSkeleton = useDelayedLoadingGate(!isLoading);
 
     // Store state
     const sortBy: SortBy = useTableUIStore(state => state.sortBy);
@@ -532,14 +540,14 @@ function LogList({
                     role="rowgroup"
                     className="relative block"
                     style={{
-                        height: isLoading
+                        height: shouldShowLoadingSkeleton
                             ? `${SKELETON_ROW_COUNT * LOG_ROW_HEIGHT}px`
                             : (errorMessage && sortedLogs.length === 0) || (logs.length > 0 && sortedLogs.length === 0)
                                 ? '240px'
                                 : `${rowVirtualizer.getTotalSize()}px`
                     }}
                 >
-                    {isLoading && (
+                    {shouldShowLoadingSkeleton && (
                         <div aria-label="Loading logs" className="animate-in fade-in-0 duration-300">
                             {Array.from({ length: SKELETON_ROW_COUNT }, (_, index) => (
                                 <LogListSkeletonRow key={index} index={index} />

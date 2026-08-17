@@ -2,6 +2,7 @@ import { AlertCircle, Clock3, FileText, HardDrive, X } from "lucide-react";
 import React from "react";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useDelayedLoadingGate } from "@/hooks/useDelayedLoadingGate";
 import { formatByteSize, countLogBodyLines } from "@/lib/logBodyMeta";
 import { useLogBody } from "@/hooks/useLogBody";
 import { useTableUIStore } from "@/store/tableUIStore";
@@ -69,6 +70,11 @@ function LogPanel() {
         errorMessage: logBodyErrorMessage
     } = useLogBody(selectedLogId, isLogPanelOpen);
     const isLogBodyLoading = logBodyStatus === 'queued' || logBodyStatus === 'fetching';
+    // Gates the skeleton's visibility only - a body already sitting in
+    // IndexedDB resolves in a couple frames and shouldn't flash a skeleton at
+    // all; a genuine Salesforce fetch that takes a beat should hold the
+    // skeleton once shown rather than swap to content a frame later.
+    const shouldShowBodySkeleton = useDelayedLoadingGate(!isLogBodyLoading);
     const [panelWidth, setPanelWidth] = React.useState(DEFAULT_PANEL_WIDTH);
     const dragStartRef = React.useRef<{
         pointerX: number;
@@ -256,7 +262,13 @@ function LogPanel() {
             </header>
 
             {isLogBodyLoading ? (
-                <LogBodySkeleton key="skeleton" />
+                // The body genuinely isn't ready yet, so this branch can't be
+                // skipped outright (there's no content to show early) - only
+                // *which* placeholder renders is gated, so a cache-hit that
+                // resolves in a couple frames shows nothing instead of a
+                // one-frame skeleton flash, while a real fetch that takes a
+                // beat still gets the full skeleton once it's been gated in.
+                shouldShowBodySkeleton ? <LogBodySkeleton key="skeleton" /> : <div className="flex-1 border-t border-border" />
             ) : logBodyStatus === 'failed' ? (
                 <div className="flex flex-1 items-center justify-center border-t border-border">
                     <EmptyState
