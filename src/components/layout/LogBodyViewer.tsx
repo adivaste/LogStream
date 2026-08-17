@@ -1,9 +1,25 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Bug, Check, ChevronDown, ChevronUp, Code2, Copy, Download, Search, WrapText, X } from "lucide-react";
+import {
+    AlertTriangle,
+    Bug,
+    Check,
+    ChevronDown,
+    ChevronUp,
+    Code2,
+    Copy,
+    Download,
+    Gauge,
+    MoreHorizontal,
+    Search,
+    WrapText,
+    X
+} from "lucide-react";
 import React from "react";
 
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea, ScrollAreaScrollbar, ScrollAreaViewport } from "@/components/ui/scroll-area";
 import { useElementScrollEdges } from "@/hooks/useScrollEdgeFade";
+import { getErrorLineNumbers, parseLimitUsage } from "@/lib/logBodyMeta";
 import { getNextLogIndex } from "@/lib/logListConfig";
 
 const LOG_LINE_HEIGHT = 24;
@@ -143,11 +159,15 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
     const [isCopyFeedbackVisible, setIsCopyFeedbackVisible] = React.useState(false);
     const [isDownloadFeedbackVisible, setIsDownloadFeedbackVisible] = React.useState(false);
     const [activePinIndex, setActivePinIndex] = React.useState(-1);
-    // Set when a pinned line is hidden by the current debug/executable filter -
-    // navigating to it has to lift the filter first, then wait for the next
-    // render (when `visibleLineIndexes` reflects "all") before it has a real
-    // virtual row to scroll to.
-    const pendingPinScrollRef = React.useRef<number | null>(null);
+    const [activeErrorIndex, setActiveErrorIndex] = React.useState(-1);
+    const [isLimitSummaryOpen, setIsLimitSummaryOpen] = React.useState(false);
+    const [isMoreMenuOpen, setIsMoreMenuOpen] = React.useState(false);
+    // Set when a pinned/error line is hidden by the current debug/executable
+    // filter - navigating to it has to lift the filter first, then wait for
+    // the next render (when `visibleLineIndexes` reflects "all") before it
+    // has a real virtual row to scroll to. Shared by both features since only
+    // one navigation can ever be in flight before its own effect clears it.
+    const pendingScrollRef = React.useRef<number | null>(null);
     // Roving-tabindex keyboard navigation (same model LogList's rows use):
     // exactly one row is ever a real tab stop, arrows move it instead of the
     // browser's own Tab order, so a keyboard user can enter the log body,
@@ -186,6 +206,17 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
 
     const pinnedLineSet = React.useMemo(() => new Set(pinnedLines), [pinnedLines]);
     const sortedPinnedLines = React.useMemo(() => [...pinnedLines].sort((a, b) => a - b), [pinnedLines]);
+
+    // `getErrorLineNumbers` returns 1-based line numbers over the same line
+    // split `lines` above uses (trailing-newline handling doesn't change the
+    // numbering of any line before it), so -1 lands exactly on source index.
+    const errorSourceLineIndexes = React.useMemo(
+        () => getErrorLineNumbers(body).map(lineNumber => lineNumber - 1),
+        [body]
+    );
+    const errorLineSet = React.useMemo(() => new Set(errorSourceLineIndexes), [errorSourceLineIndexes]);
+
+    const limitUsageMetrics = React.useMemo(() => parseLimitUsage(body), [body]);
 
     // O(1) source-index -> visible-index lookups for pin navigation, instead
     // of an indexOf scan per jump - only built while a filter is actually
@@ -396,7 +427,7 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
         moveToMatch(event.shiftKey ? -1 : 1);
     }, [moveToMatch]);
 
-    const scrollToPinnedSourceIndex = React.useCallback((sourceIndex: number) => {
+    const scrollToSourceIndex = React.useCallback((sourceIndex: number) => {
         if (!visibleIndexBySourceIndex) {
             // No filter active - source index and visible index are the same.
             lineVirtualizer.scrollToIndex(sourceIndex, { align: 'center' });
@@ -414,18 +445,18 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
         // hiding it - a pin the user set must stay reachable regardless of
         // whatever view filter happens to be on, so lift it and finish the
         // jump once the next render has a real row for it (see effect below).
-        pendingPinScrollRef.current = sourceIndex;
+        pendingScrollRef.current = sourceIndex;
         setViewFilter('all');
     }, [lineVirtualizer, visibleIndexBySourceIndex]);
 
     React.useEffect(() => {
-        const pendingSourceIndex = pendingPinScrollRef.current;
+        const pendingSourceIndex = pendingScrollRef.current;
 
         if (pendingSourceIndex === null) {
             return;
         }
 
-        pendingPinScrollRef.current = null;
+        pendingScrollRef.current = null;
         // `visibleLineIndexes` is null now that the filter was just lifted to
         // 'all', so the source index doubles as the visible index directly.
         lineVirtualizer.scrollToIndex(pendingSourceIndex, { align: 'center' });
@@ -462,9 +493,41 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
         const sourceIndex = sortedPinnedLines[nextPinIndex];
 
         if (sourceIndex !== undefined) {
-            scrollToPinnedSourceIndex(sourceIndex);
+            scrollToSourceIndex(sourceIndex);
         }
-    }, [activePinIndex, scrollToPinnedSourceIndex, sortedPinnedLines]);
+    }, [activePinIndex, scrollToSourceIndex, sortedPinnedLines]);
+
+    React.useEffect(() => {
+        if (errorSourceLineIndexes.length === 0) {
+            setActiveErrorIndex(-1);
+            return;
+        }
+
+        if (activeErrorIndex >= errorSourceLineIndexes.length) {
+            setActiveErrorIndex(errorSourceLineIndexes.length - 1);
+        }
+    }, [activeErrorIndex, errorSourceLineIndexes.length]);
+
+    const moveToError = React.useCallback((direction: 1 | -1) => {
+        if (errorSourceLineIndexes.length === 0) {
+            return;
+        }
+
+        const nextErrorIndex = activeErrorIndex < 0
+            ? (direction === 1 ? 0 : errorSourceLineIndexes.length - 1)
+            : (
+                activeErrorIndex
+                + direction
+                + errorSourceLineIndexes.length
+            ) % errorSourceLineIndexes.length;
+
+        setActiveErrorIndex(nextErrorIndex);
+        const sourceIndex = errorSourceLineIndexes[nextErrorIndex];
+
+        if (sourceIndex !== undefined) {
+            scrollToSourceIndex(sourceIndex);
+        }
+    }, [activeErrorIndex, errorSourceLineIndexes, scrollToSourceIndex]);
 
     const setRowRef = React.useCallback((sourceIndex: number, element: HTMLDivElement | null) => {
         rowRefs.current[sourceIndex] = element;
@@ -602,16 +665,6 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
 
                 <button
                     type="button"
-                    title={isCopyFeedbackVisible ? 'Copied' : 'Copy full log'}
-                    aria-label={isCopyFeedbackVisible ? 'Copied full log' : 'Copy full log'}
-                    onClick={handleCopyFullLog}
-                    className={getActionButtonClassName(isCopyFeedbackVisible)}
-                >
-                    {isCopyFeedbackVisible ? <Check size={15} /> : <Copy size={15} />}
-                </button>
-
-                <button
-                    type="button"
                     title="Debug lines"
                     aria-label="Show debug lines only"
                     aria-pressed={viewFilter === 'debug'}
@@ -643,16 +696,97 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
                     <WrapText size={15} />
                 </button>
 
-                <button
-                    type="button"
-                    title={isDownloadFeedbackVisible ? 'Downloaded' : 'Download log'}
-                    aria-label={isDownloadFeedbackVisible ? 'Downloaded log' : 'Download log'}
-                    onClick={handleDownload}
-                    className={getActionButtonClassName(isDownloadFeedbackVisible)}
-                >
-                    {isDownloadFeedbackVisible ? <Check size={15} /> : <Download size={15} />}
-                </button>
+                {/* Only worth showing once there's something to show - a log
+                    with no parsed CUMULATIVE_LIMIT_USAGE block (purged, or an
+                    older API version) shouldn't offer an empty toggle. */}
+                {limitUsageMetrics.length > 0 && (
+                    <button
+                        type="button"
+                        title="Limit usage"
+                        aria-label="Toggle governor limit usage summary"
+                        aria-pressed={isLimitSummaryOpen}
+                        onClick={() => setIsLimitSummaryOpen(open => !open)}
+                        className={getActionButtonClassName(isLimitSummaryOpen)}
+                    >
+                        <Gauge size={15} />
+                    </button>
+                )}
+
+                {/* Less-frequent, one-shot actions live behind this menu
+                    instead of the primary row - keeps the toolbar from growing
+                    an icon for every feature added over time. This is the one
+                    control here that gets a text label, since its whole job is
+                    to be the discoverable entry point to everything else. */}
+                <Popover open={isMoreMenuOpen} onOpenChange={setIsMoreMenuOpen}>
+                    <PopoverTrigger asChild>
+                        <button
+                            type="button"
+                            title="More actions"
+                            aria-label="More actions"
+                            aria-expanded={isMoreMenuOpen}
+                            className={`
+                                flex h-8 shrink-0 items-center gap-1.5 rounded-md border-0 bg-input/80 px-2.5 text-xs
+                                font-medium text-muted-foreground hover:bg-input/90 hover:text-primary
+                                focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500
+                                dark:bg-input/80 dark:hover:bg-input/90
+                            `}
+                        >
+                            <MoreHorizontal size={15} />
+                            More
+                        </button>
+                    </PopoverTrigger>
+                    <PopoverContent align="end" className="w-44 border-border bg-popover p-1 font-sans">
+                        <button
+                            type="button"
+                            onClick={() => {
+                                void handleCopyFullLog();
+                                setIsMoreMenuOpen(false);
+                            }}
+                            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground hover:bg-muted"
+                        >
+                            {isCopyFeedbackVisible ? <Check size={14} className="text-emerald-600 dark:text-emerald-400" /> : <Copy size={14} />}
+                            {isCopyFeedbackVisible ? 'Copied' : 'Copy full log'}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                handleDownload();
+                                setIsMoreMenuOpen(false);
+                            }}
+                            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground hover:bg-muted"
+                        >
+                            {isDownloadFeedbackVisible ? <Check size={14} className="text-emerald-600 dark:text-emerald-400" /> : <Download size={14} />}
+                            {isDownloadFeedbackVisible ? 'Downloaded' : 'Download log'}
+                        </button>
+                    </PopoverContent>
+                </Popover>
             </div>
+
+            {/* User-activated, compact - sits right below the toolbar, above
+                the log body, so it's easy to reach but never takes up space
+                unless someone actually asked to see it. */}
+            {isLimitSummaryOpen && limitUsageMetrics.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5 border-b border-border bg-muted/30 px-4 py-2">
+                    {limitUsageMetrics.map(metric => {
+                        const usageRatio = metric.limit > 0 ? metric.used / metric.limit : 0;
+                        const toneClassName = usageRatio >= 0.95
+                            ? 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300'
+                            : usageRatio >= 0.75
+                                ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+                                : 'border-border bg-background text-muted-foreground';
+
+                        return (
+                            <span
+                                key={metric.key}
+                                className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[11px] leading-none ${toneClassName}`}
+                            >
+                                {metric.label}
+                                <span className="font-medium">{metric.used.toLocaleString()}/{metric.limit.toLocaleString()}</span>
+                            </span>
+                        );
+                    })}
+                </div>
+            )}
 
             <ScrollArea className="min-h-0 flex-1 bg-sidebar font-mono text-sm">
                 <ScrollAreaViewport ref={scrollParentRef} className="overscroll-contain">
@@ -686,6 +820,7 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
                             const lineNumber = sourceLineIndex + 1;
                             const isActiveMatchLine = virtualLine.index === activeMatchLineIndex;
                             const isPinned = pinnedLineSet.has(sourceLineIndex);
+                            const isErrorLine = errorLineSet.has(sourceLineIndex);
 
                             return (
                                 <div
@@ -707,7 +842,7 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
                                         ${isWrapEnabled
                                     ? 'w-full grid-cols-[4.5rem_minmax(0,1fr)] items-start'
                                     : 'min-w-full grid-cols-[4.5rem_max-content] whitespace-pre'}
-                                        ${isActiveMatchLine ? 'bg-orange-500/10' : isPinned ? 'bg-emerald-500/10' : ''}
+                                        ${isActiveMatchLine ? 'bg-orange-500/10' : isErrorLine ? 'bg-red-500/10' : isPinned ? 'bg-emerald-500/10' : ''}
                                         outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-emerald-500
                                     `}
                                     style={{
@@ -718,9 +853,15 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
                                         transform: `translateY(${virtualLine.start}px)`,
                                         // The accent bar stays even when a search match's orange
                                         // background is winning the row's bg color above - it's the
-                                        // one marker that always says "this line is pinned" regardless
-                                        // of whatever else is highlighting the row right now.
-                                        boxShadow: isPinned ? 'inset 3px 0 0 0 var(--color-emerald-500)' : undefined
+                                        // one marker that always says "this line is pinned/an error"
+                                        // regardless of whatever else is highlighting the row right
+                                        // now. A pin is a deliberate user mark, so it wins the bar over
+                                        // an auto-detected error on the rare line that's both.
+                                        boxShadow: isPinned
+                                            ? 'inset 3px 0 0 0 var(--color-emerald-500)'
+                                            : isErrorLine
+                                                ? 'inset 3px 0 0 0 var(--color-red-500)'
+                                                : undefined
                                     }}
                                 >
                                     <div
@@ -734,7 +875,9 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
                                             transition-colors
                                             ${isPinned
                                     ? 'border-border bg-emerald-500/10 font-medium text-emerald-700 dark:text-emerald-300'
-                                    : 'border-border/70 bg-sidebar text-muted-foreground/70 hover:bg-muted/60 hover:text-muted-foreground'}
+                                    : isErrorLine
+                                        ? 'border-border bg-red-500/10 font-medium text-red-700 dark:text-red-400'
+                                        : 'border-border/70 bg-sidebar text-muted-foreground/70 hover:bg-muted/60 hover:text-muted-foreground'}
                                         `}
                                     >
                                         {lineNumber}
@@ -796,6 +939,36 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
                         className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                     >
                         <X size={14} />
+                    </button>
+                </div>
+            )}
+
+            {/* Bottom-left, mirroring the pin navigator's bottom-right spot -
+                errors are auto-detected rather than user-set, so there's no
+                clear-all control here, just previous/next. */}
+            {errorSourceLineIndexes.length > 0 && (
+                <div className="absolute bottom-4 left-4 z-20 flex items-center gap-0.5 rounded-md border border-red-500/30 bg-popover/95 p-1 shadow-lg backdrop-blur-sm">
+                    <AlertTriangle size={13} className="mx-1 text-red-600 dark:text-red-400" />
+                    <button
+                        type="button"
+                        title="Previous error"
+                        aria-label="Previous error"
+                        onClick={() => moveToError(-1)}
+                        className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-primary"
+                    >
+                        <ChevronUp size={14} />
+                    </button>
+                    <span className="min-w-8 px-1 text-center font-mono text-[11px] text-muted-foreground">
+                        {activeErrorIndex >= 0 ? activeErrorIndex + 1 : '-'}/{errorSourceLineIndexes.length}
+                    </span>
+                    <button
+                        type="button"
+                        title="Next error"
+                        aria-label="Next error"
+                        onClick={() => moveToError(1)}
+                        className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-primary"
+                    >
+                        <ChevronDown size={14} />
                     </button>
                 </div>
             )}
