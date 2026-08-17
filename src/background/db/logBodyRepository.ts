@@ -98,6 +98,48 @@ export const logBodyRepository = {
         return recordsToDelete.map(record => record.logId);
     },
 
+    async enforceByteBudget(orgId: SalesforceOrgId, maxBytes: number) {
+        const records = await getAllForOrg(orgId);
+        const totalStoredBytes = records.reduce((total, record) => total + record.byteLength, 0);
+
+        if (totalStoredBytes <= maxBytes) {
+            return [];
+        }
+
+        // Oldest-accessed first (LRU), not oldest-fetched - a log the user
+        // keeps reopening should survive being over budget as long as
+        // something staler is available to evict instead.
+        const sortedByLastAccessed = [...records].sort((firstRecord, secondRecord) => {
+            return firstRecord.lastAccessedAt.localeCompare(secondRecord.lastAccessedAt);
+        });
+        const recordsToDelete: LogBodyStorageRecord[] = [];
+        let remainingBytes = totalStoredBytes;
+
+        for (const record of sortedByLastAccessed) {
+            if (remainingBytes <= maxBytes) {
+                break;
+            }
+
+            recordsToDelete.push(record);
+            remainingBytes -= record.byteLength;
+        }
+
+        if (recordsToDelete.length === 0) {
+            return [];
+        }
+
+        const transaction = await createReadwriteTransaction(LOGSTREAM_STORES.logBodies);
+        const store = transaction.objectStore(LOGSTREAM_STORES.logBodies);
+
+        recordsToDelete.forEach(record => {
+            store.delete(record.storageKey);
+        });
+
+        await transactionDone(transaction);
+
+        return recordsToDelete.map(record => record.logId);
+    },
+
     async deleteOldestFetched(orgId: SalesforceOrgId, deleteCount: number) {
         if (deleteCount <= 0) {
             return [];

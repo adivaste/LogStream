@@ -196,6 +196,53 @@ export const logRepository = {
         return records.sort(compareLogsAscending)[0] ?? null;
     },
 
+    async deleteOlderThan(orgId: SalesforceOrgId, cutoffIso: string) {
+        const records = await getAllForOrg(orgId);
+        const recordsToDelete = records.filter(record => record.startTime < cutoffIso);
+
+        if (recordsToDelete.length === 0) {
+            return [];
+        }
+
+        const transaction = await createReadwriteTransaction(LOGSTREAM_STORES.logs);
+        const store = transaction.objectStore(LOGSTREAM_STORES.logs);
+
+        recordsToDelete.forEach(record => {
+            store.delete(record.storageKey);
+        });
+
+        await transactionDone(transaction);
+
+        return recordsToDelete.map(record => record.id);
+    },
+
+    async getAllOrgIds(): Promise<SalesforceOrgId[]> {
+        const transaction = await createReadonlyTransaction(LOGSTREAM_STORES.logs);
+        const store = transaction.objectStore(LOGSTREAM_STORES.logs);
+        const index = store.index('by-org');
+
+        return new Promise((resolve, reject) => {
+            const orgIds: SalesforceOrgId[] = [];
+            // `nextunique` walks the index skipping duplicate keys, so this
+            // returns one entry per org without loading every log record.
+            const request = index.openKeyCursor(null, 'nextunique');
+
+            request.onsuccess = () => {
+                const cursor = request.result;
+
+                if (!cursor) {
+                    resolve(orgIds);
+                    return;
+                }
+
+                orgIds.push(cursor.key as SalesforceOrgId);
+                cursor.continue();
+            };
+
+            request.onerror = () => reject(request.error);
+        });
+    },
+
     async deleteOldest(orgId: SalesforceOrgId, deleteCount: number) {
         if (deleteCount <= 0) {
             return [];

@@ -2,6 +2,7 @@ import { openLogStreamDb } from "./db/db";
 import { handleWorkerMessage } from "./messageHandler";
 import { liveLogPoller } from "./poller";
 import { sessionStore } from "./session/sessionStore";
+import { storageRetentionService } from "./storageRetention";
 import type { WorkerRequest, WorkerResponse } from "@/types/workerMessages";
 
 type ChromeMessageSender = unknown;
@@ -80,6 +81,7 @@ const registerLifecycleListeners = () => {
     });
 
     liveLogPoller.registerAlarmListener();
+    storageRetentionService.registerAlarmListener();
 }
 
 const registerMessageListener = () => {
@@ -139,5 +141,6 @@ export const startBackgroundRuntime = () => {
     registerActionClickListener();
     void initBackgroundRuntime().then(() => {
         void liveLogPoller.start();
+        storageRetentionService.start();
     });
 }
