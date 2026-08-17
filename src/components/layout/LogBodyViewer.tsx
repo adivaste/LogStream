@@ -148,8 +148,12 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
     // into 6 visual lines), the row visibly overlaps the one below it until
     // it "catches up". The fix is to make the estimate itself accurate:
     // measure the monospace character width once, track the available
-    // content width, and estimate each wrapped row's height from its exact
-    // character count - close enough that there's nothing visible to correct.
+    // content width, and estimate each wrapped row's height from its
+    // character count. Word-aware wrapping (`break-words`, not `break-all`)
+    // means real line breaks land at whitespace rather than at the exact
+    // char-count cutoff, so this is an approximation rather than exact math
+    // now - close enough that `measureElement` only ever needs to correct it
+    // by a line, and only for the rare row with unusually long/short words.
     const charWidthPxRef = React.useRef(LOG_LINE_HEIGHT * 0.42);
     const contentWidthPxRef = React.useRef(0);
     const [searchQuery, setSearchQuery] = React.useState('');
@@ -884,7 +888,7 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
                                         {lineNumber}
                                     </div>
                                     <div
-                                        className={`px-3 text-sm leading-6 text-muted-foreground ${isWrapEnabled ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'}`}
+                                        className={`px-3 text-sm leading-6 text-muted-foreground ${isWrapEnabled ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'}`}
                                     >
                                         {renderHighlightedLine(line, deferredSearchQuery)}
                                     </div>
