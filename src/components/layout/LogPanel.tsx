@@ -261,11 +261,18 @@ function LogPanel() {
                                 <span className="font-mono">{selectedLog.duration}</span>
                             </span>
                         </div>
-                    ) : (
-                        <span className="shrink-0 rounded-md bg-muted px-2 py-1 font-mono text-xs leading-none text-muted-foreground">
-                            Loading body...
-                        </span>
-                    )}
+                    ) : shouldShowBodySkeleton ? (
+                        // Same shape as the real stat badges (not a generic
+                        // "Loading..." pill) and gated by the same delayed-show
+                        // rule as the body skeleton below - a cached body that
+                        // resolves in a couple frames shows nothing here either,
+                        // instead of flashing a placeholder for an instant.
+                        <div className="flex shrink-0 items-center gap-1.5" aria-label="Loading log details">
+                            <Skeleton className="h-[26px] w-16 rounded-md" />
+                            <Skeleton className="h-[26px] w-14 rounded-md" />
+                            <Skeleton className="h-[26px] w-12 rounded-md" />
+                        </div>
+                    ) : null}
                 </div>
 
                 <button
