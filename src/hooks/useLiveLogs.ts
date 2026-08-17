@@ -70,6 +70,15 @@ export const useLiveLogs = () => {
     const latestLogsRef = React.useRef<LogEntry[]>([]);
     const stateRef = React.useRef<UseLiveLogsState>(INITIAL_LIVE_LOGS_STATE);
     const isOlderLogsRequestInFlightRef = React.useRef(false);
+    // Guards against a slower, earlier GET_LOGS response landing after a
+    // faster, later one and overwriting fresher state with stale data - the
+    // reset effect below force-clears `isRequestInFlightRef` on every
+    // dependency change (org switch, live-stream toggle) so a still-pending
+    // request's own `finally` doesn't wrongly get blamed for blocking the
+    // next one, which means two loadLogs calls CAN genuinely be in flight at
+    // once. Only the response matching the generation active when it
+    // resolves is allowed to touch state.
+    const requestGenerationRef = React.useRef(0);
     const isConnected = Boolean(connectionInfo);
 
     React.useEffect(() => {
@@ -158,6 +167,8 @@ export const useLiveLogs = () => {
         }
 
         isRequestInFlightRef.current = true;
+        const requestGeneration = ++requestGenerationRef.current;
+        const isStaleResponse = () => requestGeneration !== requestGenerationRef.current;
 
         if (isConnected && isLiveStreamOn && !isIdleRef.current) {
             setLivePollingState('syncing');
@@ -177,6 +188,10 @@ export const useLiveLogs = () => {
                 orgId,
                 limit: LIVE_LOG_PAGE_LIMIT
             });
+
+            if (isStaleResponse()) {
+                return;
+            }
 
             if (response.type === 'LOGS') {
                 const incomingLogs = response.page.logs.map(mapSalesforceLogToUiLog);
@@ -246,6 +261,10 @@ export const useLiveLogs = () => {
                 olderLogsErrorMessage: null
             });
         } catch (error: unknown) {
+            if (isStaleResponse()) {
+                return;
+            }
+
             setState({
                 logs: isInitialLoad ? [] : latestLogsRef.current,
                 isLoading: false,
@@ -397,6 +416,12 @@ export const useLiveLogs = () => {
         isRequestInFlightRef.current = false;
         isIdleRef.current = false;
         lastActivityAtRef.current = Date.now();
+        // Invalidate any request still in flight from before this change
+        // (org switch, live-stream toggle) - the disconnect branch below
+        // resets state directly without going through loadLogs, so without
+        // this a stale response from the old org could still land and
+        // overwrite that reset.
+        requestGenerationRef.current += 1;
 
         if (!isConnected) {
             setLivePollingState('offline');
