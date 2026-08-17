@@ -1,6 +1,7 @@
-import { AlertCircle, Clock3, FileText, HardDrive, Loader2, X } from "lucide-react";
+import { AlertCircle, Clock3, FileText, HardDrive, X } from "lucide-react";
 import React from "react";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Skeleton } from "@/components/ui/skeleton";
 import { formatByteSize, countLogBodyLines } from "@/lib/logBodyMeta";
 import { useLogBody } from "@/hooks/useLogBody";
 import { useTableUIStore } from "@/store/tableUIStore";
@@ -13,6 +14,41 @@ const MAX_PANEL_WIDTH_RATIO = 0.9;
 // every render when there's no log/no pins yet - a new array reference each
 // time would make every consuming useMemo/effect below think pins "changed".
 const EMPTY_PINNED_LINES: number[] = [];
+
+// Mirrors LogBodyViewer's real shape (toolbar + 4.5rem gutter/content grid)
+// so the swap to real content doesn't visibly jump. Content-bar widths cycle
+// through a fixed pattern rather than one size, reading as "lines of varying
+// real code" instead of a uniform block.
+const LOG_BODY_SKELETON_LINE_COUNT = 26;
+const LOG_BODY_SKELETON_LINE_WIDTHS = [92, 64, 78, 45, 88, 55, 70, 38, 82, 60, 95, 50, 73, 42];
+
+function LogBodySkeleton() {
+    return (
+        <div className="flex min-h-0 flex-1 flex-col border-t border-border">
+            <div className="flex items-center gap-2 border-b border-border px-4 py-2">
+                <Skeleton className="h-8 min-w-0 flex-1 rounded-md" />
+                <Skeleton className="h-8 w-8 shrink-0 rounded-md" />
+                <Skeleton className="h-8 w-8 shrink-0 rounded-md" />
+                <Skeleton className="h-8 w-8 shrink-0 rounded-md" />
+            </div>
+            <div className="flex-1 overflow-hidden bg-sidebar py-1">
+                {Array.from({ length: LOG_BODY_SKELETON_LINE_COUNT }, (_, index) => (
+                    <div key={index} className="grid grid-cols-[4.5rem_minmax(0,1fr)]" style={{ height: 24 }}>
+                        <div className="flex items-center justify-end border-r border-border/70 pr-3">
+                            <Skeleton className="h-3 w-4" />
+                        </div>
+                        <div className="flex items-center px-3">
+                            <Skeleton
+                                className="h-3"
+                                style={{ width: `${LOG_BODY_SKELETON_LINE_WIDTHS[index % LOG_BODY_SKELETON_LINE_WIDTHS.length]}%` }}
+                            />
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
 
 function LogPanel() {
     const selectedLog = useTableUIStore(state => state.selectedLog);
@@ -220,14 +256,7 @@ function LogPanel() {
             </header>
 
             {isLogBodyLoading ? (
-                <div className="flex flex-1 items-center justify-center border-t border-border">
-                    <EmptyState
-                        icon={Loader2}
-                        iconClassName="[&_svg]:animate-spin"
-                        title="Loading log body"
-                        description="Fetching the full log content..."
-                    />
-                </div>
+                <LogBodySkeleton key="skeleton" />
             ) : logBodyStatus === 'failed' ? (
                 <div className="flex flex-1 items-center justify-center border-t border-border">
                     <EmptyState
@@ -238,13 +267,19 @@ function LogPanel() {
                     />
                 </div>
             ) : (
-                <LogBodyViewer
-                    body={logBody}
-                    fileName={`${selectedLog.id}.log`}
-                    pinnedLines={pinnedLines}
-                    onTogglePinnedLine={(sourceLineIndex) => togglePinnedLine(selectedLog.id, sourceLineIndex)}
-                    onClearPinnedLines={() => clearPinnedLines(selectedLog.id)}
-                />
+                // Keyed separately from the skeleton above so this branch is a
+                // real mount, not a re-render of the same element - that's
+                // what makes the fade-in play once, right as real content
+                // replaces the skeleton, instead of on every re-render.
+                <div key="loaded" className="flex min-h-0 flex-1 flex-col animate-in fade-in-0 duration-300">
+                    <LogBodyViewer
+                        body={logBody}
+                        fileName={`${selectedLog.id}.log`}
+                        pinnedLines={pinnedLines}
+                        onTogglePinnedLine={(sourceLineIndex) => togglePinnedLine(selectedLog.id, sourceLineIndex)}
+                        onClearPinnedLines={() => clearPinnedLines(selectedLog.id)}
+                    />
+                </div>
             )}
         </aside>
     );

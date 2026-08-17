@@ -2,10 +2,11 @@ import {
     type VirtualItem,
     useVirtualizer
 } from "@tanstack/react-virtual";
-import { AlertCircle, ArrowDown, ArrowUp, Loader2, SearchX } from "lucide-react";
+import { AlertCircle, ArrowDown, ArrowUp, SearchX } from "lucide-react";
 import React from "react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
     LOG_ROW_HEIGHT,
     LOG_TABLE_COLUMNS,
@@ -22,6 +23,32 @@ import { useElementScrollEdges } from "@/hooks/useScrollEdgeFade";
 import { useTableUIStore } from "@/store/tableUIStore";
 import { type LogEntry, SortBy, SortDirection } from "@/types/ui";
 import { LogFilterBar } from "./LogFilterBar";
+
+// Filled enough to cover a typical viewport so the loading state doesn't
+// visibly run out of rows before real data replaces it. Column widths cycle
+// through a few variants per field instead of one fixed size each, so the
+// placeholder reads as "rows of varying real text" rather than a uniform
+// grid of identical bars.
+const SKELETON_ROW_COUNT = 16;
+const SKELETON_OPERATION_WIDTHS = ['78%', '55%', '88%', '46%', '65%', '70%'];
+const SKELETON_USER_WIDTHS = ['48%', '35%', '58%', '42%'];
+const SKELETON_APP_WIDTHS = ['40%', '58%', '32%'];
+
+const LogListSkeletonRow = React.memo(function LogListSkeletonRow({ index }: { index: number }) {
+    return (
+        <div
+            className="grid items-center gap-4 border-b border-border px-8"
+            style={{ height: LOG_ROW_HEIGHT, gridTemplateColumns: LOG_TABLE_GRID_TEMPLATE_COLUMNS }}
+        >
+            <Skeleton className="h-3.5" style={{ width: SKELETON_OPERATION_WIDTHS[index % SKELETON_OPERATION_WIDTHS.length] }} />
+            <Skeleton className="h-3.5" style={{ width: SKELETON_USER_WIDTHS[index % SKELETON_USER_WIDTHS.length] }} />
+            <Skeleton className="h-3.5" style={{ width: SKELETON_APP_WIDTHS[index % SKELETON_APP_WIDTHS.length] }} />
+            <Skeleton className="h-3.5 w-12 justify-self-end" />
+            <Skeleton className="h-5 w-14 justify-self-end rounded" />
+            <Skeleton className="h-3.5 w-20" />
+        </div>
+    );
+});
 
 type LogGridHeaderProps = {
     sortBy: SortBy;
@@ -505,19 +532,19 @@ function LogList({
                     role="rowgroup"
                     className="relative block"
                     style={{
-                        height: isLoading || (errorMessage && sortedLogs.length === 0) || (logs.length > 0 && sortedLogs.length === 0)
-                            ? '240px'
-                            : `${rowVirtualizer.getTotalSize()}px`
+                        height: isLoading
+                            ? `${SKELETON_ROW_COUNT * LOG_ROW_HEIGHT}px`
+                            : (errorMessage && sortedLogs.length === 0) || (logs.length > 0 && sortedLogs.length === 0)
+                                ? '240px'
+                                : `${rowVirtualizer.getTotalSize()}px`
                     }}
                 >
                     {isLoading && (
-                        <EmptyState
-                            className="absolute inset-0"
-                            icon={Loader2}
-                            iconClassName="[&_svg]:animate-spin"
-                            title="Loading logs"
-                            description="Reading logs from the local cache..."
-                        />
+                        <div aria-label="Loading logs" className="animate-in fade-in-0 duration-300">
+                            {Array.from({ length: SKELETON_ROW_COUNT }, (_, index) => (
+                                <LogListSkeletonRow key={index} index={index} />
+                            ))}
+                        </div>
                     )}
 
                     {errorMessage && sortedLogs.length === 0 && (
