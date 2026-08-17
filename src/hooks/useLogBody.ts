@@ -18,12 +18,19 @@ const INITIAL_LOG_BODY_STATE: UseLogBodyState = {
     errorMessage: null
 };
 
-// Only worth interrupting the user for a download that's genuinely slow -
-// most logs finish well under this, and showing a toast for every fetch
-// would just be noise. Mirrors the app's existing "don't flash UI for fast
-// things" rule (useDelayedLoadingGate), just applied to a toast instead of
-// a skeleton.
-const DOWNLOAD_TOAST_SHOW_DELAY_MS = 800;
+// Fallback gate for when Salesforce doesn't send Content-Length (edge-
+// transformed responses can omit it, so total size isn't knowable upfront) -
+// only worth interrupting the user for a download that's genuinely slow.
+// Mirrors the app's existing "don't flash UI for fast things" rule
+// (useDelayedLoadingGate), just applied to a toast instead of a skeleton.
+const DOWNLOAD_TOAST_SHOW_DELAY_MS = 5_000;
+// Primary gate, used whenever Content-Length IS known: shows the toast the
+// moment a log is known to be this big, regardless of how fast it downloads.
+// A time-only gate would miss an 18MB log entirely on a fast connection,
+// since the whole download can finish before an elapsed-time timer ever
+// fires - size is knowable immediately (headers arrive before any body
+// chunk is read), so it doesn't need to wait at all.
+const DOWNLOAD_TOAST_SIZE_THRESHOLD_BYTES = 2 * 1024 * 1024;
 const DOWNLOAD_TOAST_ID = 'log-body-download-progress';
 
 const formatDownloadProgressMessage = (receivedBytes: number, totalBytes: number | null) => {
@@ -95,6 +102,15 @@ export const useLogBody = (
             }
 
             latestProgress = { receivedBytes: message.receivedBytes, totalBytes: message.totalBytes };
+
+            if (
+                !hasShownDownloadToast
+                && message.totalBytes !== null
+                && message.totalBytes >= DOWNLOAD_TOAST_SIZE_THRESHOLD_BYTES
+            ) {
+                showDownloadToast(message.receivedBytes, message.totalBytes);
+                return;
+            }
 
             if (hasShownDownloadToast) {
                 showDownloadToast(message.receivedBytes, message.totalBytes);

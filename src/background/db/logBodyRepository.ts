@@ -16,6 +16,11 @@ import {
     transactionDone
 } from "./db";
 
+// Evicting down to exactly the cap makes a successful cleanup invisible
+// (still reads as ~100% used) - clean to 90% instead, so hitting the budget
+// again takes a while and the result is a visible, meaningful drop.
+const BYTE_BUDGET_LOW_WATERMARK_RATIO = 0.9;
+
 const toStorageRecord = (record: SalesforceLogRecord): LogBodyStorageRecord => {
     return {
         ...record,
@@ -114,6 +119,13 @@ export const logBodyRepository = {
             return [];
         }
 
+        // Evict down to a low-watermark below the cap, not to exactly at it -
+        // stopping the instant `remainingBytes <= maxBytes` is true can land
+        // within a rounding error of the cap (e.g. 199.9MB of 200MB), which
+        // still displays as "100%" after a real, successful cleanup and
+        // reads as "nothing happened". Standard high/low watermark pattern:
+        // trigger at the cap, clean to comfortably under it.
+        const targetBytes = maxBytes * BYTE_BUDGET_LOW_WATERMARK_RATIO;
         // Oldest-accessed first (LRU), not oldest-fetched - a log the user
         // keeps reopening should survive being over budget as long as
         // something staler is available to evict instead.
@@ -124,7 +136,7 @@ export const logBodyRepository = {
         let remainingBytes = totalStoredBytes;
 
         for (const record of sortedByLastAccessed) {
-            if (remainingBytes <= maxBytes) {
+            if (remainingBytes <= targetBytes) {
                 break;
             }
 

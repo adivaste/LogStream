@@ -182,7 +182,14 @@ function CleanupTab() {
     }, []);
 
     const handleCleanupNow = async () => {
-        await runCleanupNow();
+        const didSucceed = await runCleanupNow();
+
+        if (!didSucceed) {
+            // Failure is surfaced via the error banner below instead - no
+            // success feedback for a cleanup that didn't actually happen.
+            return;
+        }
+
         setIsCleanupFeedbackVisible(true);
 
         if (cleanupFeedbackTimeoutRef.current) {
@@ -224,6 +231,16 @@ function CleanupTab() {
 
     return (
         <div className="flex flex-col gap-4">
+            {/* The two early returns above only cover the *first* load - once
+                `usage` has loaded once, a later failure (e.g. a manual
+                cleanup that errors) must still be visible instead of
+                silently doing nothing from the user's perspective. */}
+            {errorMessage && (
+                <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                    {errorMessage}
+                </p>
+            )}
+
             <div className="flex items-center gap-4 rounded-md border border-border bg-background p-3">
                 <StorageUsageDonut usedBytes={usage.bodyBytes} maxBytes={usage.maxBodyBytes} />
                 <div className="flex min-w-0 flex-1 flex-col gap-1">

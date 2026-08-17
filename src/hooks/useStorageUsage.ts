@@ -97,9 +97,9 @@ export const useStorageUsage = (isEnabled: boolean) => {
         ));
     }, []);
 
-    const runCleanupNow = React.useCallback(async () => {
+    const runCleanupNow = React.useCallback(async (): Promise<boolean> => {
         if (!connectionInfo) {
-            return;
+            return false;
         }
 
         setIsCleaningUp(true);
@@ -116,18 +116,20 @@ export const useStorageUsage = (isEnabled: boolean) => {
                     isLoading: false,
                     errorMessage: null
                 });
-                return;
+                return true;
             }
 
             setState(currentState => ({
                 ...currentState,
                 errorMessage: response.type === 'ERROR' ? response.message : CLEANUP_ERROR_MESSAGE
             }));
+            return false;
         } catch (error) {
             setState(currentState => ({
                 ...currentState,
                 errorMessage: error instanceof Error ? error.message : CLEANUP_ERROR_MESSAGE
             }));
+            return false;
         } finally {
             setIsCleaningUp(false);
         }
