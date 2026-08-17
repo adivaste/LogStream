@@ -18,18 +18,24 @@ const INITIAL_LOG_BODY_STATE: UseLogBodyState = {
     errorMessage: null
 };
 
-// Fallback gate for when Salesforce doesn't send Content-Length (edge-
-// transformed responses can omit it, so total size isn't knowable upfront) -
-// only worth interrupting the user for a download that's genuinely slow.
-// Mirrors the app's existing "don't flash UI for fast things" rule
-// (useDelayedLoadingGate), just applied to a toast instead of a skeleton.
+// Last-resort fallback for when Salesforce doesn't send Content-Length AND
+// the download hasn't yet transferred enough to trip the byte-based gate
+// below (a slow-but-small response) - only worth interrupting the user for
+// something genuinely slow. Mirrors the app's existing "don't flash UI for
+// fast things" rule (useDelayedLoadingGate), just applied to a toast instead
+// of a skeleton.
 const DOWNLOAD_TOAST_SHOW_DELAY_MS = 800;
-// Primary gate, used whenever Content-Length IS known: shows the toast the
-// moment a log is known to be this big, regardless of how fast it downloads.
-// A time-only gate would miss an 18MB log entirely on a fast connection,
-// since the whole download can finish before an elapsed-time timer ever
-// fires - size is knowable immediately (headers arrive before any body
-// chunk is read), so it doesn't need to wait at all.
+// Primary gate: fires the instant either the *advertised* total (Content-
+// Length, known immediately from headers, before any body chunk is read) OR
+// the *actual* bytes received so far crosses this line - whichever happens
+// first. Content-Length alone isn't reliable enough on its own: Salesforce
+// doesn't always send it (edge-transformed/chunked responses can omit it),
+// and when that's the header missing on a genuinely huge log, a time-only
+// gate would still miss it entirely if the transfer happens to finish
+// before the elapsed-time fallback fires - a large log can download faster
+// than the delay window on a good connection. Gating on real bytes received
+// makes this deterministic instead of dependent on a header that may or may
+// not show up.
 const DOWNLOAD_TOAST_SIZE_THRESHOLD_BYTES = 2 * 1024 * 1024;
 const DOWNLOAD_TOAST_ID = 'log-body-download-progress';
 
@@ -105,8 +111,10 @@ export const useLogBody = (
 
             if (
                 !hasShownDownloadToast
-                && message.totalBytes !== null
-                && message.totalBytes >= DOWNLOAD_TOAST_SIZE_THRESHOLD_BYTES
+                && (
+                    (message.totalBytes !== null && message.totalBytes >= DOWNLOAD_TOAST_SIZE_THRESHOLD_BYTES)
+                    || message.receivedBytes >= DOWNLOAD_TOAST_SIZE_THRESHOLD_BYTES
+                )
             ) {
                 showDownloadToast(message.receivedBytes, message.totalBytes);
                 return;
