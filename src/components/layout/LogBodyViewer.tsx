@@ -1067,7 +1067,7 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
                             }}
                             className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground hover:bg-muted"
                         >
-                            {isCopyFeedbackVisible ? <Check size={14} className="text-emerald-600 dark:text-emerald-400" /> : <Copy size={14} />}
+                            {isCopyFeedbackVisible ? <Check size={14} className="shrink-0 text-emerald-600 dark:text-emerald-400" /> : <Copy size={14} className="shrink-0" />}
                             {isCopyFeedbackVisible ? 'Copied' : 'Copy full log'}
                         </button>
                         {sortedPinnedLines.length > 0 && (
@@ -1077,13 +1077,10 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
                                     void handleCopyPinnedLines();
                                     setIsMoreMenuOpen(false);
                                 }}
-                                className="flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground hover:bg-muted"
+                                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground hover:bg-muted"
                             >
-                                <span className="flex items-center gap-2">
-                                    {isPinCopyFeedbackVisible ? <Check size={14} className="text-emerald-600 dark:text-emerald-400" /> : <Copy size={14} />}
-                                    {isPinCopyFeedbackVisible ? 'Copied' : 'Copy pinned lines'}
-                                </span>
-                                <span className="font-mono text-[10px] text-muted-foreground">Ctrl+Shift+C</span>
+                                {isPinCopyFeedbackVisible ? <Check size={14} className="shrink-0 text-emerald-600 dark:text-emerald-400" /> : <Copy size={14} className="shrink-0" />}
+                                {isPinCopyFeedbackVisible ? 'Copied' : 'Copy pinned lines'}
                             </button>
                         )}
                         <button
@@ -1094,7 +1091,7 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
                             }}
                             className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground hover:bg-muted"
                         >
-                            {isDownloadFeedbackVisible ? <Check size={14} className="text-emerald-600 dark:text-emerald-400" /> : <Download size={14} />}
+                            {isDownloadFeedbackVisible ? <Check size={14} className="shrink-0 text-emerald-600 dark:text-emerald-400" /> : <Download size={14} className="shrink-0" />}
                             {isDownloadFeedbackVisible ? 'Downloaded' : 'Download log'}
                         </button>
                         <div className="my-1 h-px bg-border" aria-hidden="true" />
