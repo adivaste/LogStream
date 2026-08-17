@@ -1,3 +1,5 @@
+import { useStorageUsage } from "@/hooks/useStorageUsage";
+import { formatByteSize } from "@/lib/logBodyMeta";
 import { useUIStore } from "@/store/uiStore";
 
 import {
@@ -9,6 +11,7 @@ import {
     DialogTitle,
 } from "../ui/dialog";
 import { Switch } from "../ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 
 const MS_PER_SECOND = 1_000;
 const MS_PER_MINUTE = 60_000;
@@ -66,6 +69,165 @@ function NumberField({ label, description, unit, value, min, onChange }: NumberF
     );
 }
 
+// Status-tone thresholds mirror the existing governor-limit usage grid
+// (LogBodyViewer's limit summary) rather than introducing a new color rule -
+// same red/amber/emerald bands, same meaning ("getting close to a cap").
+const getUsageToneClassName = (usageRatio: number) => {
+    if (usageRatio >= 0.95) {
+        return 'text-red-700 dark:text-red-400';
+    }
+
+    if (usageRatio >= 0.75) {
+        return 'text-amber-700 dark:text-amber-400';
+    }
+
+    return 'text-emerald-700 dark:text-emerald-400';
+}
+
+const getUsageStrokeClassName = (usageRatio: number) => {
+    if (usageRatio >= 0.95) {
+        return 'stroke-red-500';
+    }
+
+    if (usageRatio >= 0.75) {
+        return 'stroke-amber-500';
+    }
+
+    return 'stroke-emerald-500';
+}
+
+const DONUT_SIZE_PX = 88;
+const DONUT_STROKE_WIDTH_PX = 9;
+const DONUT_RADIUS = (DONUT_SIZE_PX - DONUT_STROKE_WIDTH_PX) / 2;
+const DONUT_CIRCUMFERENCE = 2 * Math.PI * DONUT_RADIUS;
+
+// A single measurement (bytes used out of a cap) reads better as a progress
+// ring than a multi-slice pie - there's no categorical breakdown to compare,
+// just "how full is this", so a legend/second color would only add noise.
+function StorageUsageDonut({ usedBytes, maxBytes }: { usedBytes: number; maxBytes: number }) {
+    const usageRatio = maxBytes > 0 ? Math.min(1, usedBytes / maxBytes) : 0;
+    const dashOffset = DONUT_CIRCUMFERENCE * (1 - usageRatio);
+
+    return (
+        <div className="relative shrink-0" style={{ width: DONUT_SIZE_PX, height: DONUT_SIZE_PX }}>
+            <svg
+                width={DONUT_SIZE_PX}
+                height={DONUT_SIZE_PX}
+                viewBox={`0 0 ${DONUT_SIZE_PX} ${DONUT_SIZE_PX}`}
+                className="-rotate-90"
+                role="img"
+                aria-label={`${formatByteSize(usedBytes)} of ${formatByteSize(maxBytes)} log storage used`}
+            >
+                <circle
+                    cx={DONUT_SIZE_PX / 2}
+                    cy={DONUT_SIZE_PX / 2}
+                    r={DONUT_RADIUS}
+                    fill="none"
+                    strokeWidth={DONUT_STROKE_WIDTH_PX}
+                    className="stroke-muted"
+                />
+                <circle
+                    cx={DONUT_SIZE_PX / 2}
+                    cy={DONUT_SIZE_PX / 2}
+                    r={DONUT_RADIUS}
+                    fill="none"
+                    strokeWidth={DONUT_STROKE_WIDTH_PX}
+                    strokeLinecap="round"
+                    strokeDasharray={DONUT_CIRCUMFERENCE}
+                    strokeDashoffset={dashOffset}
+                    className={`transition-[stroke-dashoffset] duration-500 ease-out ${getUsageStrokeClassName(usageRatio)}`}
+                />
+            </svg>
+            <div className="absolute inset-0 flex flex-col items-center justify-center">
+                <span className={`font-mono text-sm font-semibold ${getUsageToneClassName(usageRatio)}`}>
+                    {Math.round(usageRatio * 100)}%
+                </span>
+            </div>
+        </div>
+    );
+}
+
+function StatRow({ label, value }: { label: string; value: string }) {
+    return (
+        <div className="flex items-center justify-between py-1">
+            <span className="text-sm text-foreground">{label}</span>
+            <span className="font-mono text-sm text-muted-foreground">{value}</span>
+        </div>
+    );
+}
+
+function CleanupTab() {
+    const isOpen = useUIStore(state => state.isSettingsModalOpen);
+    const {
+        usage,
+        isLoading,
+        errorMessage,
+        isConnected,
+        setRetentionDays
+    } = useStorageUsage(isOpen);
+
+    if (!isConnected) {
+        return (
+            <p className="py-6 text-center text-sm text-muted-foreground">
+                Connect to Salesforce to view storage usage.
+            </p>
+        );
+    }
+
+    if (isLoading && !usage) {
+        return (
+            <p className="py-6 text-center text-sm text-muted-foreground">
+                Loading storage usage...
+            </p>
+        );
+    }
+
+    if (errorMessage && !usage) {
+        return (
+            <p className="py-6 text-center text-sm text-destructive">
+                {errorMessage}
+            </p>
+        );
+    }
+
+    if (!usage) {
+        return null;
+    }
+
+    return (
+        <div className="flex flex-col gap-4">
+            <div className="flex items-center gap-4 rounded-md border border-border bg-background p-3">
+                <StorageUsageDonut usedBytes={usage.bodyBytes} maxBytes={usage.maxBodyBytes} />
+                <div className="flex min-w-0 flex-1 flex-col gap-1">
+                    <span className="text-sm font-medium text-foreground">Log body storage</span>
+                    <span className="font-mono text-xs text-muted-foreground">
+                        {formatByteSize(usage.bodyBytes)} of {formatByteSize(usage.maxBodyBytes)} used
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                        Oldest-accessed bodies are evicted first once this fills up.
+                    </span>
+                </div>
+            </div>
+
+            <div className="flex flex-col divide-y divide-border rounded-md border border-border bg-background px-3">
+                <StatRow label="Cached logs" value={`${usage.logCount.toLocaleString()} / ${usage.maxLogCount.toLocaleString()}`} />
+                <StatRow label="Cached log bodies" value={usage.bodyCount.toLocaleString()} />
+            </div>
+
+            <div className="border-t border-border pt-3">
+                <NumberField
+                    label="Retention window"
+                    description="Logs and bodies older than this are deleted automatically, once a day."
+                    unit="days"
+                    min={1}
+                    value={usage.retentionDays}
+                    onChange={(days) => void setRetentionDays(days)}
+                />
+            </div>
+        </div>
+    );
+}
+
 export const SettingsSheet = () => {
     const isOpen = useUIStore(state => state.isSettingsModalOpen);
     const setOpen = useUIStore(state => state.setSettingsModalOpen);
@@ -84,62 +246,67 @@ export const SettingsSheet = () => {
                     </DialogDescription>
                 </DialogHeader>
 
-                <div className="grid max-h-[60vh] grid-cols-2 gap-x-8 gap-y-6 overflow-y-auto px-6">
-                    <section className="flex flex-col gap-2">
-                        <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                            UI
-                        </h3>
-                        <label className="flex items-center justify-between gap-3 py-1">
-                            <span className="text-sm text-foreground">Show insights section</span>
-                            <Switch
-                                checked={isInsightsVisible}
-                                onCheckedChange={toggleInsightsVisible}
+                <Tabs defaultValue="general" className="px-6">
+                    <TabsList className="w-full">
+                        <TabsTrigger value="general">General</TabsTrigger>
+                        <TabsTrigger value="polling">Live Streaming</TabsTrigger>
+                        <TabsTrigger value="cleanup">Cleanup</TabsTrigger>
+                    </TabsList>
+
+                    <div className="max-h-[55vh] overflow-y-auto">
+                        <TabsContent value="general" className="flex flex-col gap-2">
+                            <label className="flex items-center justify-between gap-3 py-1">
+                                <span className="text-sm text-foreground">Show insights section</span>
+                                <Switch
+                                    checked={isInsightsVisible}
+                                    onCheckedChange={toggleInsightsVisible}
+                                />
+                            </label>
+                        </TabsContent>
+
+                        <TabsContent value="polling" className="flex flex-col gap-1">
+                            <NumberField
+                                label="Poll interval"
+                                description="How often new logs are fetched while live streaming."
+                                unit="sec"
+                                min={1}
+                                value={msToSeconds(pollingPreferences.pollIntervalMs)}
+                                onChange={(seconds) => updatePollingPreferences({ pollIntervalMs: secondsToMs(seconds) })}
                             />
-                        </label>
-                    </section>
 
-                    <section className="col-span-2 flex flex-col gap-1 border-t border-border pt-4">
-                        <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                            Live Streaming
-                        </h3>
+                            <NumberField
+                                label="Idle timeout"
+                                description="Pause live streaming after this long with no activity."
+                                unit="sec"
+                                min={5}
+                                value={msToSeconds(pollingPreferences.idleTimeoutMs)}
+                                onChange={(seconds) => updatePollingPreferences({ idleTimeoutMs: secondsToMs(seconds) })}
+                            />
 
-                        <NumberField
-                            label="Poll interval"
-                            description="How often new logs are fetched while live streaming."
-                            unit="sec"
-                            min={1}
-                            value={msToSeconds(pollingPreferences.pollIntervalMs)}
-                            onChange={(seconds) => updatePollingPreferences({ pollIntervalMs: secondsToMs(seconds) })}
-                        />
+                            <NumberField
+                                label="Trace flag duration"
+                                description="How long a trace flag stays active once enabled."
+                                unit="min"
+                                min={1}
+                                value={msToMinutes(pollingPreferences.traceFlagDurationMs)}
+                                onChange={(minutes) => updatePollingPreferences({ traceFlagDurationMs: minutesToMs(minutes) })}
+                            />
 
-                        <NumberField
-                            label="Idle timeout"
-                            description="Pause live streaming after this long with no activity."
-                            unit="sec"
-                            min={5}
-                            value={msToSeconds(pollingPreferences.idleTimeoutMs)}
-                            onChange={(seconds) => updatePollingPreferences({ idleTimeoutMs: secondsToMs(seconds) })}
-                        />
+                            <NumberField
+                                label="Slow log threshold"
+                                description={'Requests slower than this count toward "Slow Reqs" in Insights.'}
+                                unit="sec"
+                                min={1}
+                                value={msToSeconds(pollingPreferences.slowLogThresholdMs)}
+                                onChange={(seconds) => updatePollingPreferences({ slowLogThresholdMs: secondsToMs(seconds) })}
+                            />
+                        </TabsContent>
 
-                        <NumberField
-                            label="Trace flag duration"
-                            description="How long a trace flag stays active once enabled."
-                            unit="min"
-                            min={1}
-                            value={msToMinutes(pollingPreferences.traceFlagDurationMs)}
-                            onChange={(minutes) => updatePollingPreferences({ traceFlagDurationMs: minutesToMs(minutes) })}
-                        />
-
-                        <NumberField
-                            label="Slow log threshold"
-                            description={'Requests slower than this count toward "Slow Reqs" in Insights.'}
-                            unit="sec"
-                            min={1}
-                            value={msToSeconds(pollingPreferences.slowLogThresholdMs)}
-                            onChange={(seconds) => updatePollingPreferences({ slowLogThresholdMs: secondsToMs(seconds) })}
-                        />
-                    </section>
-                </div>
+                        <TabsContent value="cleanup">
+                            <CleanupTab />
+                        </TabsContent>
+                    </div>
+                </Tabs>
 
                 <DialogFooter>
                     <p className="text-xs text-muted-foreground">LogStream</p>

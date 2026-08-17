@@ -13,8 +13,8 @@ const DEFAULT_RETENTION_DAYS = 7;
 // Safety nets below the age cap - a single noisy org (debug-heavy sandbox,
 // a trace flag left on too long) could otherwise blow past a reasonable
 // disk budget in days even inside the retention window.
-const MAX_BODY_BYTES_PER_ORG = 200 * 1024 * 1024;
-const MAX_LOG_COUNT_PER_ORG = 5_000;
+export const MAX_BODY_BYTES_PER_ORG = 200 * 1024 * 1024;
+export const MAX_LOG_COUNT_PER_ORG = 5_000;
 // Housekeeping, not part of any hot path - once a day is plenty.
 const CLEANUP_PERIOD_MINUTES = 24 * 60;
 
@@ -41,7 +41,7 @@ const getChromeApi = () => {
     return (globalThis as typeof globalThis & { chrome?: ChromeApi }).chrome;
 }
 
-const getRetentionDays = async (): Promise<number> => {
+export const getRetentionDays = async (): Promise<number> => {
     const storedValue = await getChromeApi()?.storage?.local?.get(RETENTION_DAYS_STORAGE_KEY);
     const storedDays = storedValue?.[RETENTION_DAYS_STORAGE_KEY];
 
@@ -61,12 +61,28 @@ export const storageRetentionService = {
         });
     },
 
-    // Not wired to any UI yet - kept as a named entry point so a future
-    // Settings control can call it without touching this module's internals.
     async setRetentionDays(days: number) {
         await getChromeApi()?.storage?.local?.set({
             [RETENTION_DAYS_STORAGE_KEY]: Math.max(MIN_RETENTION_DAYS, days)
         });
+    },
+
+    async getStorageUsage(orgId: SalesforceOrgId) {
+        const [logCount, bodyCount, bodyBytes, retentionDays] = await Promise.all([
+            logRepository.count(orgId),
+            logBodyRepository.count(orgId),
+            logBodyRepository.totalBytes(orgId),
+            getRetentionDays()
+        ]);
+
+        return {
+            logCount,
+            bodyCount,
+            bodyBytes,
+            maxBodyBytes: MAX_BODY_BYTES_PER_ORG,
+            maxLogCount: MAX_LOG_COUNT_PER_ORG,
+            retentionDays
+        };
     },
 
     registerAlarmListener() {

@@ -70,6 +70,14 @@ export const logBodyRepository = {
         return accessedRecord;
     },
 
+    async count(orgId: SalesforceOrgId) {
+        const transaction = await createReadonlyTransaction(LOGSTREAM_STORES.logBodies);
+        const store = transaction.objectStore(LOGSTREAM_STORES.logBodies);
+        const index = store.index('by-org');
+
+        return requestToPromise(index.count(orgId));
+    },
+
     async totalBytes(orgId: SalesforceOrgId) {
         const records = await getAllForOrg(orgId);
 

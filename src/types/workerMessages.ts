@@ -80,6 +80,15 @@ export type TraceFlagUserSummary = {
     debugLevelName: string | null;
 }
 
+export type StorageUsageSnapshot = {
+    logCount: number;
+    bodyCount: number;
+    bodyBytes: number;
+    maxBodyBytes: number;
+    maxLogCount: number;
+    retentionDays: number;
+}
+
 export type WorkerRequest =
     | {
         type: 'GET_SESSION';
@@ -175,6 +184,16 @@ export type WorkerRequest =
         userId: SalesforceUserId;
         expiresAt: string;
         debugLevelName: string;
+    }
+    | {
+        type: 'GET_STORAGE_USAGE';
+        requestId?: RequestId;
+        orgId: SalesforceOrgId;
+    }
+    | {
+        type: 'SET_RETENTION_DAYS';
+        requestId?: RequestId;
+        retentionDays: number;
     };
 
 export type WorkerResponse =
@@ -230,6 +249,12 @@ export type WorkerResponse =
         type: 'ACK';
         requestId?: RequestId;
         requestType: WorkerRequest['type'];
+    }
+    | {
+        type: 'STORAGE_USAGE';
+        requestId?: RequestId;
+        orgId: SalesforceOrgId;
+        usage: StorageUsageSnapshot;
     }
     | WorkerErrorResponse;
 

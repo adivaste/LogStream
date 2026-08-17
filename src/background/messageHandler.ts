@@ -11,6 +11,7 @@ import {
     isSessionRequest
 } from "./session/sessionService";
 import { sessionStore } from "./session/sessionStore";
+import { storageRetentionService } from "./storageRetention";
 import { handleLocalWorkerRequest } from "@/services/localLogStreamBackend";
 import type { WorkerErrorResponse, WorkerRequest, WorkerResponse } from "@/types/workerMessages";
 
@@ -268,6 +269,25 @@ export const handleWorkerMessage = async (
     try {
         if (request.type === 'SET_LIVE_POLL_INTERVAL_MS') {
             await liveLogPoller.setPollIntervalMs(request.pollIntervalMs);
+
+            return {
+                type: 'ACK',
+                requestId: request.requestId,
+                requestType: request.type
+            };
+        }
+
+        if (request.type === 'GET_STORAGE_USAGE') {
+            return {
+                type: 'STORAGE_USAGE',
+                requestId: request.requestId,
+                orgId: request.orgId,
+                usage: await storageRetentionService.getStorageUsage(request.orgId)
+            };
+        }
+
+        if (request.type === 'SET_RETENTION_DAYS') {
+            await storageRetentionService.setRetentionDays(request.retentionDays);
 
             return {
                 type: 'ACK',
