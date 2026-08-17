@@ -2,6 +2,7 @@ import type { SalesforceOrgId } from "@/types/salesforce";
 import { logBodyRepository } from "./db/logBodyRepository";
 import { logRepository } from "./db/logRepository";
 import { queueRepository } from "./db/queueRepository";
+import { syncStateRepository } from "./db/syncStateRepository";
 
 const STORAGE_CLEANUP_ALARM_NAME = 'logstream-storage-cleanup';
 const RETENTION_DAYS_STORAGE_KEY = 'logstream.retentionDays';
@@ -146,12 +147,17 @@ export const storageRetentionService = {
     // Unconditional wipe, not policy-driven like sweepOrg above - every
     // cached log, body, and pending download for this org is deleted
     // regardless of age or size. The org's logs/bodies simply get re-fetched
-    // from Salesforce as the user reopens them, same as a first-ever visit.
+    // from Salesforce as the user reopens them, same as a first-ever visit -
+    // which is exactly why the sync cursor has to be reset too: leaving it
+    // in place after wiping the cache it was tracking makes the next sync a
+    // tiny forward-only delta instead of a real fresh full page, hiding all
+    // the history that's supposed to come back.
     async hardClearOrg(orgId: SalesforceOrgId) {
         await Promise.all([
             logRepository.deleteAllForOrg(orgId),
             logBodyRepository.deleteAllForOrg(orgId),
-            queueRepository.deleteAllForOrg(orgId)
+            queueRepository.deleteAllForOrg(orgId),
+            syncStateRepository.resetForOrg(orgId)
         ]);
     }
 };

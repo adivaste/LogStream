@@ -84,5 +84,16 @@ export const syncStateRepository = {
             ...current,
             isIdlePaused
         });
+    },
+
+    // Must be called any time an org's cached logs are wiped out from under
+    // the incremental-sync cursor (e.g. a hard clear) - the cursor only
+    // tracks "what's new since last sync", so leaving it in place after the
+    // local cache is emptied makes the next sync fetch a tiny forward-only
+    // delta instead of a fresh full page, silently hiding all the history
+    // that was just deleted (and everything before it) behind a
+    // now-incorrect "no older logs" state.
+    async resetForOrg(orgId: SalesforceOrgId) {
+        return saveSyncState(createDefaultSyncState(orgId));
     }
 };
