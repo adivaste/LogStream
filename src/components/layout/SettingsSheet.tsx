@@ -1,3 +1,6 @@
+import { Check, Trash2 } from "lucide-react";
+import React from "react";
+
 import { useStorageUsage } from "@/hooks/useStorageUsage";
 import { formatByteSize } from "@/lib/logBodyMeta";
 import { useUIStore } from "@/store/uiStore";
@@ -161,10 +164,35 @@ function CleanupTab() {
     const {
         usage,
         isLoading,
+        isCleaningUp,
         errorMessage,
         isConnected,
-        setRetentionDays
+        setRetentionDays,
+        runCleanupNow
     } = useStorageUsage(isOpen);
+    const [isCleanupFeedbackVisible, setIsCleanupFeedbackVisible] = React.useState(false);
+    const cleanupFeedbackTimeoutRef = React.useRef<number | null>(null);
+
+    React.useEffect(() => {
+        return () => {
+            if (cleanupFeedbackTimeoutRef.current) {
+                window.clearTimeout(cleanupFeedbackTimeoutRef.current);
+            }
+        };
+    }, []);
+
+    const handleCleanupNow = async () => {
+        await runCleanupNow();
+        setIsCleanupFeedbackVisible(true);
+
+        if (cleanupFeedbackTimeoutRef.current) {
+            window.clearTimeout(cleanupFeedbackTimeoutRef.current);
+        }
+
+        cleanupFeedbackTimeoutRef.current = window.setTimeout(() => {
+            setIsCleanupFeedbackVisible(false);
+        }, 1200);
+    }
 
     if (!isConnected) {
         return (
@@ -207,6 +235,25 @@ function CleanupTab() {
                         Oldest-accessed bodies are evicted first once this fills up.
                     </span>
                 </div>
+                <button
+                    type="button"
+                    disabled={isCleaningUp}
+                    onClick={() => void handleCleanupNow()}
+                    className="
+                        flex shrink-0 items-center gap-1.5 self-start rounded-md border-0 bg-input/80 px-2.5 py-1.5
+                        text-xs font-medium text-muted-foreground transition-colors
+                        hover:bg-input/90 hover:text-primary disabled:pointer-events-none disabled:opacity-60
+                        focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500
+                        dark:bg-input/80 dark:hover:bg-input/90
+                    "
+                >
+                    {isCleanupFeedbackVisible ? (
+                        <Check size={13} className="text-emerald-600 dark:text-emerald-400" />
+                    ) : (
+                        <Trash2 size={13} className={isCleaningUp ? 'animate-pulse' : ''} />
+                    )}
+                    {isCleanupFeedbackVisible ? 'Cleaned up' : isCleaningUp ? 'Cleaning...' : 'Clean up now'}
+                </button>
             </div>
 
             <div className="flex flex-col divide-y divide-border rounded-md border border-border bg-background px-3">

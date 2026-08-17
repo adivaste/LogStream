@@ -194,6 +194,11 @@ export type WorkerRequest =
         type: 'SET_RETENTION_DAYS';
         requestId?: RequestId;
         retentionDays: number;
+    }
+    | {
+        type: 'RUN_STORAGE_CLEANUP';
+        requestId?: RequestId;
+        orgId: SalesforceOrgId;
     };
 
 export type WorkerResponse =

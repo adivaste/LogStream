@@ -59,6 +59,13 @@ export const storageRetentionService = {
         getChromeApi()?.alarms?.create?.(STORAGE_CLEANUP_ALARM_NAME, {
             periodInMinutes: CLEANUP_PERIOD_MINUTES
         });
+
+        // `chrome.alarms.create` only schedules the *next* fire up to 24h
+        // out - it doesn't run once immediately. Without this, an org that's
+        // already over a cap (or freshly upgraded to a version with this
+        // cap) would stay over it for up to a full day after every install/
+        // update/service-worker restart before the alarm ever fires once.
+        void this.runSweep();
     },
 
     async setRetentionDays(days: number) {
@@ -112,13 +119,26 @@ export const storageRetentionService = {
         await logBodyRepository.deleteOrphans(orgId);
     },
 
-    async runSweep() {
+    async getCutoffIso() {
         const retentionDays = await getRetentionDays();
-        const cutoffIso = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+
+        return new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+    },
+
+    async runSweep() {
+        const cutoffIso = await this.getCutoffIso();
         const orgIds = await logRepository.getAllOrgIds();
 
         for (const orgId of orgIds) {
             await this.sweepOrg(orgId, cutoffIso);
         }
+    },
+
+    // Manual "clean up now" trigger, scoped to just the org the user is
+    // currently looking at - the daily alarm already sweeps every org, so a
+    // user-initiated click only needs to be fast and reflect what they're
+    // actually looking at.
+    async runSweepForOrg(orgId: SalesforceOrgId) {
+        await this.sweepOrg(orgId, await this.getCutoffIso());
     }
 };

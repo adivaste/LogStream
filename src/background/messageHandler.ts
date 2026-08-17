@@ -296,6 +296,17 @@ export const handleWorkerMessage = async (
             };
         }
 
+        if (request.type === 'RUN_STORAGE_CLEANUP') {
+            await storageRetentionService.runSweepForOrg(request.orgId);
+
+            return {
+                type: 'STORAGE_USAGE',
+                requestId: request.requestId,
+                orgId: request.orgId,
+                usage: await storageRetentionService.getStorageUsage(request.orgId)
+            };
+        }
+
         if (isSessionRequest(request)) {
             return await handleSessionRequest(request);
         }
