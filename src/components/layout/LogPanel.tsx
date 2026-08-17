@@ -75,6 +75,28 @@ function LogPanel() {
     // all; a genuine Salesforce fetch that takes a beat should hold the
     // skeleton once shown rather than swap to content a frame later.
     const shouldShowBodySkeleton = useDelayedLoadingGate(!isLogBodyLoading);
+    // The fade-in below should only play when there was something to fade
+    // in FROM - a cached body that resolves in a couple frames never shows
+    // the skeleton at all, so animating its arrival just adds a visible
+    // 300ms delay to what should be an instant swap. Only a load that was
+    // slow enough to actually show the skeleton earns the transition.
+    const [didShowBodySkeleton, setDidShowBodySkeleton] = React.useState(false);
+
+    // Split into two effects (rather than one with an if/else-if) so a
+    // render where a new load just started AND the skeleton just became
+    // visible can't have the reset silently win over the set - both need to
+    // apply independently in commit order.
+    React.useEffect(() => {
+        if (isLogBodyLoading) {
+            setDidShowBodySkeleton(false);
+        }
+    }, [isLogBodyLoading]);
+
+    React.useEffect(() => {
+        if (shouldShowBodySkeleton) {
+            setDidShowBodySkeleton(true);
+        }
+    }, [shouldShowBodySkeleton]);
     const [panelWidth, setPanelWidth] = React.useState(DEFAULT_PANEL_WIDTH);
     const dragStartRef = React.useRef<{
         pointerX: number;
@@ -282,8 +304,15 @@ function LogPanel() {
                 // Keyed separately from the skeleton above so this branch is a
                 // real mount, not a re-render of the same element - that's
                 // what makes the fade-in play once, right as real content
-                // replaces the skeleton, instead of on every re-render.
-                <div key="loaded" className="flex min-h-0 flex-1 flex-col animate-in fade-in-0 duration-300">
+                // replaces the skeleton, instead of on every re-render. The
+                // fade-in class itself is conditional on the skeleton having
+                // actually shown - a cached body that resolves in a couple
+                // frames should swap in instantly, not animate in over 300ms
+                // for a "transition" the user never needed to see.
+                <div
+                    key="loaded"
+                    className={`flex min-h-0 flex-1 flex-col ${didShowBodySkeleton ? 'animate-in fade-in-0 duration-300' : ''}`}
+                >
                     <LogBodyViewer
                         body={logBody}
                         fileName={`${selectedLog.id}.log`}
