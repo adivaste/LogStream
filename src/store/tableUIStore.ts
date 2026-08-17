@@ -45,6 +45,12 @@ type TableUIState = {
     selectedLog: LogEntry | null;
     logReadAtById: Record<string, string>;
     isLogPanelOpen: boolean;
+    // Keyed by log id (not the log body viewer's own state) so pins survive
+    // closing and reopening the log panel - LogBodyViewer fully unmounts on
+    // close, which resets everything local to it. Session-only: intentionally
+    // not persisted to IndexedDB, since a pin is a marker for the debugging
+    // pass you're doing right now, not a permanent bookmark.
+    pinnedLinesByLogId: Record<string, number[]>;
 }
 type TableUIActions = {
     setSorting(_sortBy: SortBy, _sortDirection: SortDirection): void;
@@ -58,6 +64,8 @@ type TableUIActions = {
     setLogPanelOpen(_isOpen: boolean): void;
     selectLog(_log: LogEntry): void;
     markLogRead(_log: LogEntry): LogEntry;
+    togglePinnedLine(_logId: string, _sourceLineIndex: number): void;
+    clearPinnedLines(_logId: string): void;
 }
 type TableUIStore = TableUIState & TableUIActions;
 
@@ -98,6 +106,7 @@ export const useTableUIStore = create<TableUIStore>((set) => ({
     selectedLog: null,
     logReadAtById: {},
     isLogPanelOpen: false,
+    pinnedLinesByLogId: {},
     
     // Actions
     setSorting: (sortBy: SortBy, sortDirection: SortDirection) => {
@@ -172,6 +181,25 @@ export const useTableUIStore = create<TableUIStore>((set) => ({
                 logReadAtById: state.logReadAtById
             };
         });
-    }
+    },
+    togglePinnedLine: (logId: string, sourceLineIndex: number) => set(state => {
+        const currentPins = state.pinnedLinesByLogId[logId] ?? [];
+        const nextPins = currentPins.includes(sourceLineIndex)
+            ? currentPins.filter(pinnedIndex => pinnedIndex !== sourceLineIndex)
+            : [...currentPins, sourceLineIndex].sort((a, b) => a - b);
+
+        return {
+            pinnedLinesByLogId: {
+                ...state.pinnedLinesByLogId,
+                [logId]: nextPins
+            }
+        };
+    }),
+    clearPinnedLines: (logId: string) => set(state => ({
+        pinnedLinesByLogId: {
+            ...state.pinnedLinesByLogId,
+            [logId]: []
+        }
+    }))
 
 }));

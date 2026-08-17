@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Bug, Check, Code2, Copy, Download, Search, WrapText } from "lucide-react";
+import { Bug, Check, ChevronDown, ChevronUp, Code2, Copy, Download, Search, WrapText, X } from "lucide-react";
 import React from "react";
 
 import { ScrollArea, ScrollAreaScrollbar, ScrollAreaViewport } from "@/components/ui/scroll-area";
@@ -21,6 +21,12 @@ const EXECUTABLE_LINE_PATTERN = /\|(METHOD_ENTRY|METHOD_EXIT|SOQL_EXECUTE_BEGIN|
 type LogBodyViewerProps = {
     body: string;
     fileName: string;
+    // Source line indexes (0-based, stable across wrap toggling and view
+    // filtering - never the virtualizer's own row index, which shifts
+    // whenever the debug/executable filter changes which rows exist at all).
+    pinnedLines: number[];
+    onTogglePinnedLine: (_sourceLineIndex: number) => void;
+    onClearPinnedLines: () => void;
 }
 
 type LogViewFilter = 'all' | 'debug' | 'executable';
@@ -113,7 +119,7 @@ const isExecutableLine = (line: string) => {
     return EXECUTABLE_LINE_PATTERN.test(line);
 }
 
-function LogBodyViewer({ body, fileName }: LogBodyViewerProps) {
+function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClearPinnedLines }: LogBodyViewerProps) {
     const scrollParentRef = React.useRef<HTMLDivElement | null>(null);
     const charWidthProbeRef = React.useRef<HTMLSpanElement | null>(null);
     const copyFeedbackTimeoutRef = React.useRef<number | null>(null);
@@ -135,6 +141,12 @@ function LogBodyViewer({ body, fileName }: LogBodyViewerProps) {
     const [isWrapEnabled, setIsWrapEnabled] = React.useState(false);
     const [isCopyFeedbackVisible, setIsCopyFeedbackVisible] = React.useState(false);
     const [isDownloadFeedbackVisible, setIsDownloadFeedbackVisible] = React.useState(false);
+    const [activePinIndex, setActivePinIndex] = React.useState(-1);
+    // Set when a pinned line is hidden by the current debug/executable filter -
+    // navigating to it has to lift the filter first, then wait for the next
+    // render (when `visibleLineIndexes` reflects "all") before it has a real
+    // virtual row to scroll to.
+    const pendingPinScrollRef = React.useRef<number | null>(null);
     const scrollEdges = useElementScrollEdges(scrollParentRef);
 
     const lines = React.useMemo(() => {
@@ -161,6 +173,23 @@ function LogBodyViewer({ body, fileName }: LogBodyViewerProps) {
 
         return indexes;
     }, [lines, viewFilter]);
+
+    const pinnedLineSet = React.useMemo(() => new Set(pinnedLines), [pinnedLines]);
+    const sortedPinnedLines = React.useMemo(() => [...pinnedLines].sort((a, b) => a - b), [pinnedLines]);
+
+    // O(1) source-index -> visible-index lookups for pin navigation, instead
+    // of an indexOf scan per jump - only built while a filter is actually
+    // narrowing the view; `visibleLineIndexes` is null under 'all'.
+    const visibleIndexBySourceIndex = React.useMemo(() => {
+        if (!visibleLineIndexes) {
+            return null;
+        }
+
+        const map = new Map<number, number>();
+        visibleLineIndexes.forEach((sourceIndex, visibleIndex) => map.set(sourceIndex, visibleIndex));
+
+        return map;
+    }, [visibleLineIndexes]);
 
     const visibleLineCount = visibleLineIndexes?.length ?? lines.length;
 
@@ -357,6 +386,76 @@ function LogBodyViewer({ body, fileName }: LogBodyViewerProps) {
         moveToMatch(event.shiftKey ? -1 : 1);
     }, [moveToMatch]);
 
+    const scrollToPinnedSourceIndex = React.useCallback((sourceIndex: number) => {
+        if (!visibleIndexBySourceIndex) {
+            // No filter active - source index and visible index are the same.
+            lineVirtualizer.scrollToIndex(sourceIndex, { align: 'center' });
+            return;
+        }
+
+        const visibleIndex = visibleIndexBySourceIndex.get(sourceIndex);
+
+        if (visibleIndex !== undefined) {
+            lineVirtualizer.scrollToIndex(visibleIndex, { align: 'center' });
+            return;
+        }
+
+        // The pinned line exists but the current debug/executable filter is
+        // hiding it - a pin the user set must stay reachable regardless of
+        // whatever view filter happens to be on, so lift it and finish the
+        // jump once the next render has a real row for it (see effect below).
+        pendingPinScrollRef.current = sourceIndex;
+        setViewFilter('all');
+    }, [lineVirtualizer, visibleIndexBySourceIndex]);
+
+    React.useEffect(() => {
+        const pendingSourceIndex = pendingPinScrollRef.current;
+
+        if (pendingSourceIndex === null) {
+            return;
+        }
+
+        pendingPinScrollRef.current = null;
+        // `visibleLineIndexes` is null now that the filter was just lifted to
+        // 'all', so the source index doubles as the visible index directly.
+        lineVirtualizer.scrollToIndex(pendingSourceIndex, { align: 'center' });
+    }, [lineVirtualizer, visibleLineIndexes]);
+
+    // Clamp like `activeMatchIndex` does for search matches above - if pins
+    // were removed out from under the current position, land on the last
+    // valid one instead of pointing past the end of the array.
+    React.useEffect(() => {
+        if (sortedPinnedLines.length === 0) {
+            setActivePinIndex(-1);
+            return;
+        }
+
+        if (activePinIndex >= sortedPinnedLines.length) {
+            setActivePinIndex(sortedPinnedLines.length - 1);
+        }
+    }, [activePinIndex, sortedPinnedLines.length]);
+
+    const moveToPin = React.useCallback((direction: 1 | -1) => {
+        if (sortedPinnedLines.length === 0) {
+            return;
+        }
+
+        const nextPinIndex = activePinIndex < 0
+            ? (direction === 1 ? 0 : sortedPinnedLines.length - 1)
+            : (
+                activePinIndex
+                + direction
+                + sortedPinnedLines.length
+            ) % sortedPinnedLines.length;
+
+        setActivePinIndex(nextPinIndex);
+        const sourceIndex = sortedPinnedLines[nextPinIndex];
+
+        if (sourceIndex !== undefined) {
+            scrollToPinnedSourceIndex(sourceIndex);
+        }
+    }, [activePinIndex, scrollToPinnedSourceIndex, sortedPinnedLines]);
+
     const handleCopyFullLog = React.useCallback(async () => {
         await navigator.clipboard.writeText(body);
         showCopyFeedback();
@@ -388,7 +487,7 @@ function LogBodyViewer({ body, fileName }: LogBodyViewerProps) {
     }
 
     return (
-        <section className="flex min-h-0 flex-1 flex-col border-t border-border">
+        <section className="relative flex min-h-0 flex-1 flex-col border-t border-border">
             <div className="flex items-center gap-2 border-b border-border px-4 py-2">
                 <div className="
                     flex h-8 min-w-0 flex-1 items-center gap-2 border-0 rounded-md bg-input/80 dark:bg-input/80 px-2
@@ -498,6 +597,7 @@ function LogBodyViewer({ body, fileName }: LogBodyViewerProps) {
                             const line = lines[sourceLineIndex] ?? '';
                             const lineNumber = sourceLineIndex + 1;
                             const isActiveMatchLine = virtualLine.index === activeMatchLineIndex;
+                            const isPinned = pinnedLineSet.has(sourceLineIndex);
 
                             return (
                                 <div
@@ -509,17 +609,35 @@ function LogBodyViewer({ body, fileName }: LogBodyViewerProps) {
                                         ${isWrapEnabled
                                     ? 'w-full grid-cols-[4.5rem_minmax(0,1fr)] items-start'
                                     : 'min-w-full grid-cols-[4.5rem_max-content] whitespace-pre'}
-                                        ${isActiveMatchLine ? 'bg-orange-500/10' : ''}
+                                        ${isActiveMatchLine ? 'bg-orange-500/10' : isPinned ? 'bg-emerald-500/10' : ''}
                                     `}
                                     style={{
                                         // Fixed-height rows are cheap to position with a fixed height;
                                         // wrapped rows are measured, so let content define the height
                                         // instead of forcing the (now stale) estimate.
                                         height: isWrapEnabled ? undefined : `${virtualLine.size}px`,
-                                        transform: `translateY(${virtualLine.start}px)`
+                                        transform: `translateY(${virtualLine.start}px)`,
+                                        // The accent bar stays even when a search match's orange
+                                        // background is winning the row's bg color above - it's the
+                                        // one marker that always says "this line is pinned" regardless
+                                        // of whatever else is highlighting the row right now.
+                                        boxShadow: isPinned ? 'inset 3px 0 0 0 var(--color-emerald-500)' : undefined
                                     }}
                                 >
-                                    <div className="sticky left-0 z-10 select-none border-r border-border/70 bg-sidebar pr-3 text-right text-sm leading-6 text-muted-foreground/70">
+                                    <div
+                                        role="button"
+                                        title={isPinned ? `Unpin line ${lineNumber}` : `Pin line ${lineNumber}`}
+                                        aria-label={isPinned ? `Unpin line ${lineNumber}` : `Pin line ${lineNumber}`}
+                                        aria-pressed={isPinned}
+                                        onClick={() => onTogglePinnedLine(sourceLineIndex)}
+                                        className={`
+                                            sticky left-0 z-10 cursor-pointer select-none border-r pr-3 text-right text-sm leading-6
+                                            transition-colors
+                                            ${isPinned
+                                    ? 'border-border bg-emerald-500/10 font-medium text-emerald-700 dark:text-emerald-300'
+                                    : 'border-border/70 bg-sidebar text-muted-foreground/70 hover:bg-muted/60 hover:text-muted-foreground'}
+                                        `}
+                                    >
                                         {lineNumber}
                                     </div>
                                     <div
@@ -544,6 +662,44 @@ function LogBodyViewer({ body, fileName }: LogBodyViewerProps) {
                 </ScrollAreaViewport>
                 <ScrollAreaScrollbar />
             </ScrollArea>
+
+            {/* Only rendered once something is actually pinned - no permanent
+                chrome for a feature that isn't in use on this log. */}
+            {sortedPinnedLines.length > 0 && (
+                <div className="absolute bottom-4 right-4 z-20 flex items-center gap-0.5 rounded-md border border-border bg-popover/95 p-1 shadow-lg backdrop-blur-sm">
+                    <button
+                        type="button"
+                        title="Previous pinned line"
+                        aria-label="Previous pinned line"
+                        onClick={() => moveToPin(-1)}
+                        className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-primary"
+                    >
+                        <ChevronUp size={14} />
+                    </button>
+                    <span className="min-w-8 px-1 text-center font-mono text-[11px] text-muted-foreground">
+                        {activePinIndex >= 0 ? activePinIndex + 1 : '-'}/{sortedPinnedLines.length}
+                    </span>
+                    <button
+                        type="button"
+                        title="Next pinned line"
+                        aria-label="Next pinned line"
+                        onClick={() => moveToPin(1)}
+                        className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-primary"
+                    >
+                        <ChevronDown size={14} />
+                    </button>
+                    <div className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
+                    <button
+                        type="button"
+                        title="Clear all pinned lines"
+                        aria-label="Clear all pinned lines"
+                        onClick={onClearPinnedLines}
+                        className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                    >
+                        <X size={14} />
+                    </button>
+                </div>
+            )}
         </section>
     );
 }

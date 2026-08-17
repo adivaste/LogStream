@@ -9,12 +9,24 @@ import { LogBodyViewer } from "./LogBodyViewer";
 const DEFAULT_PANEL_WIDTH = 768;
 const MIN_PANEL_WIDTH = 480;
 const MAX_PANEL_WIDTH_RATIO = 0.9;
+// Stable reference so the store selector doesn't hand back a fresh `[]` on
+// every render when there's no log/no pins yet - a new array reference each
+// time would make every consuming useMemo/effect below think pins "changed".
+const EMPTY_PINNED_LINES: number[] = [];
 
 function LogPanel() {
     const selectedLog = useTableUIStore(state => state.selectedLog);
     const isLogPanelOpen = useTableUIStore(state => state.isLogPanelOpen);
     const setLogPanelOpen = useTableUIStore(state => state.setLogPanelOpen);
+    const togglePinnedLine = useTableUIStore(state => state.togglePinnedLine);
+    const clearPinnedLines = useTableUIStore(state => state.clearPinnedLines);
     const selectedLogId = selectedLog?.id ?? null;
+    // Kept in tableUIStore (keyed by log id), not local to LogBodyViewer -
+    // that component fully unmounts on close, so pins live one level up to
+    // survive closing/reopening the panel and switching between logs.
+    const pinnedLines = useTableUIStore(state => (
+        selectedLogId ? state.pinnedLinesByLogId[selectedLogId] ?? EMPTY_PINNED_LINES : EMPTY_PINNED_LINES
+    ));
     const {
         body: logBody,
         status: logBodyStatus,
@@ -229,6 +241,9 @@ function LogPanel() {
                 <LogBodyViewer
                     body={logBody}
                     fileName={`${selectedLog.id}.log`}
+                    pinnedLines={pinnedLines}
+                    onTogglePinnedLine={(sourceLineIndex) => togglePinnedLine(selectedLog.id, sourceLineIndex)}
+                    onClearPinnedLines={() => clearPinnedLines(selectedLog.id)}
                 />
             )}
         </aside>
