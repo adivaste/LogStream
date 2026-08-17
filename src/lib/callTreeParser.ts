@@ -459,6 +459,29 @@ export const parseCallTree = (lines: string[]): CallTreeParseResult => {
     };
 }
 
+// Collects the ids of every node at or below `fromDepth` that actually has
+// children - i.e. everything that could meaningfully be collapsed. Used both
+// for "collapse all" and for auto-collapsing a very large tree on open.
+export const collectCollapsibleNodeIds = (
+    nodes: CallNode[],
+    fromDepth: number,
+    collected: number[] = []
+): number[] => {
+    for (const node of nodes) {
+        if (node.children.length === 0) {
+            continue;
+        }
+
+        if (node.depth >= fromDepth) {
+            collected.push(node.id);
+        }
+
+        collectCollapsibleNodeIds(node.children, fromDepth, collected);
+    }
+
+    return collected;
+}
+
 const getMergeKey = (node: CallNode) => {
     return `${node.kind} ${node.apexLine ?? -1} ${node.label}`;
 }

@@ -15,6 +15,7 @@ const MAX_PANEL_WIDTH_RATIO = 0.9;
 // every render when there's no log/no pins yet - a new array reference each
 // time would make every consuming useMemo/effect below think pins "changed".
 const EMPTY_PINNED_LINES: number[] = [];
+const EMPTY_COLLAPSED_NODES: number[] = [];
 
 // Mirrors LogBodyViewer's real shape (toolbar + 4.5rem gutter/content grid)
 // so the swap to real content doesn't visibly jump. Content-bar widths cycle
@@ -26,14 +27,23 @@ const LOG_BODY_SKELETON_LINE_WIDTHS = [92, 64, 78, 45, 88, 55, 70, 38, 82, 60, 9
 function LogBodySkeleton() {
     return (
         <div className="flex min-h-0 flex-1 flex-col border-t border-border">
+            {/* Mirrors the real toolbar's control run - mode switch, search,
+                go-to-line, three icon toggles, then the labelled More button.
+                Kept in step with LogBodyViewer's toolbar so the swap from
+                skeleton to content doesn't visibly jump. */}
             <div className="flex items-center gap-2 border-b border-border px-4 py-2">
+                <Skeleton className="h-8 w-[6.5rem] shrink-0 rounded-md" />
                 <Skeleton className="h-8 min-w-0 flex-1 rounded-md" />
+                <Skeleton className="h-8 w-28 shrink-0 rounded-md" />
                 <Skeleton className="h-8 w-8 shrink-0 rounded-md" />
                 <Skeleton className="h-8 w-8 shrink-0 rounded-md" />
                 <Skeleton className="h-8 w-8 shrink-0 rounded-md" />
+                <Skeleton className="h-8 w-16 shrink-0 rounded-md" />
             </div>
             <div className="flex-1 overflow-hidden bg-sidebar py-1">
                 {Array.from({ length: LOG_BODY_SKELETON_LINE_COUNT }, (_, index) => (
+                    // NOTE: keep this grid in sync with LOG_LINE_NUMBER_COLUMN_PX
+                    // and the row templates in LogBodyViewer.
                     <div key={index} className="grid grid-cols-[4.5rem_minmax(0,1fr)]" style={{ height: 24 }}>
                         <div className="flex items-center justify-end border-r border-border/70 pr-3">
                             <Skeleton className="h-3 w-4" />
@@ -63,6 +73,13 @@ function LogPanel() {
     // survive closing/reopening the panel and switching between logs.
     const pinnedLines = useTableUIStore(state => (
         selectedLogId ? state.pinnedLinesByLogId[selectedLogId] ?? EMPTY_PINNED_LINES : EMPTY_PINNED_LINES
+    ));
+    const toggleCallTreeNode = useTableUIStore(state => state.toggleCallTreeNode);
+    const setCallTreeCollapsedNodes = useTableUIStore(state => state.setCallTreeCollapsedNodes);
+    const collapsedCallTreeNodes = useTableUIStore(state => (
+        selectedLogId
+            ? state.collapsedCallTreeNodesByLogId[selectedLogId] ?? EMPTY_COLLAPSED_NODES
+            : EMPTY_COLLAPSED_NODES
     ));
     const {
         body: logBody,
@@ -323,9 +340,13 @@ function LogPanel() {
                     <LogBodyViewer
                         body={logBody}
                         fileName={`${selectedLog.id}.log`}
+                        logId={selectedLog.id}
                         pinnedLines={pinnedLines}
                         onTogglePinnedLine={(sourceLineIndex) => togglePinnedLine(selectedLog.id, sourceLineIndex)}
                         onClearPinnedLines={() => clearPinnedLines(selectedLog.id)}
+                        collapsedCallTreeNodes={collapsedCallTreeNodes}
+                        onToggleCallTreeNode={(nodeId) => toggleCallTreeNode(selectedLog.id, nodeId)}
+                        onSetCallTreeCollapsedNodes={(nodeIds) => setCallTreeCollapsedNodes(selectedLog.id, nodeIds)}
                     />
                 </div>
             )}

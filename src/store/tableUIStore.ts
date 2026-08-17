@@ -6,6 +6,7 @@ import {
 import { sendWorkerRequest } from "@/services/backgroundBridge";
 import { useUIStore } from "@/store/uiStore";
 import {
+    type LogBodyViewMode,
     type LogEntry,
     SortBy,
     SortDirection
@@ -51,6 +52,17 @@ type TableUIState = {
     // not persisted to IndexedDB, since a pin is a marker for the debugging
     // pass you're doing right now, not a permanent bookmark.
     pinnedLinesByLogId: Record<string, number[]>;
+    // Which body view the log panel is showing. Session-only, and deliberately
+    // NOT an AppPreferences entry like wrapEnabled/viewFilter/fontSizePx are:
+    // whether a log even has a call tree depends on the trace flag's APEX_CODE
+    // level at capture time, so a persisted 'tree' would drop the user on an
+    // empty tree tomorrow when they open a coarser log. Those other prefs are
+    // safe to persist precisely because they degrade gracefully on any log.
+    logBodyViewMode: LogBodyViewMode;
+    // Collapsed call-tree frames, keyed by log id for the same reason pins
+    // are (LogBodyViewer unmounts on panel close). Node ids are source line
+    // indexes, so this mirrors pinnedLinesByLogId's shape exactly.
+    collapsedCallTreeNodesByLogId: Record<string, number[]>;
 }
 type TableUIActions = {
     setSorting(_sortBy: SortBy, _sortDirection: SortDirection): void;
@@ -66,6 +78,9 @@ type TableUIActions = {
     markLogRead(_log: LogEntry): LogEntry;
     togglePinnedLine(_logId: string, _sourceLineIndex: number): void;
     clearPinnedLines(_logId: string): void;
+    setLogBodyViewMode(_mode: LogBodyViewMode): void;
+    toggleCallTreeNode(_logId: string, _nodeId: number): void;
+    setCallTreeCollapsedNodes(_logId: string, _nodeIds: number[]): void;
 }
 type TableUIStore = TableUIState & TableUIActions;
 
@@ -91,7 +106,7 @@ const createDefaultFilterEndTime = () => {
 }
 
 
-export const useTableUIStore = create<TableUIStore>((set) => ({
+export const useTableUIStore = create<TableUIStore>((set, get) => ({
 
     // Initial State
     sortBy: DEFAULT_SORT_BY,
@@ -107,7 +122,9 @@ export const useTableUIStore = create<TableUIStore>((set) => ({
     logReadAtById: {},
     isLogPanelOpen: false,
     pinnedLinesByLogId: {},
-    
+    logBodyViewMode: 'raw',
+    collapsedCallTreeNodesByLogId: {},
+
     // Actions
     setSorting: (sortBy: SortBy, sortDirection: SortDirection) => {
         persistLogTableSortingPreference(sortBy, sortDirection);
@@ -125,8 +142,12 @@ export const useTableUIStore = create<TableUIStore>((set) => ({
         minSizeBytes: null,
         maxSizeBytes: null
     }),
+    // Reads through zustand's own `get` rather than useTableUIStore.getState().
+    // Referencing the exported store from inside its own initializer made the
+    // whole store infer as `any`, which silently spread to every `state =>`
+    // selector in every component that consumes it.
     isDefaultFilterRange: () => {
-        const state = useTableUIStore.getState();
+        const state = get();
         const defaultStartTime = createDefaultFilterStartTime();
         const defaultEndTime = createDefaultFilterEndTime();
 
@@ -199,6 +220,28 @@ export const useTableUIStore = create<TableUIStore>((set) => ({
         pinnedLinesByLogId: {
             ...state.pinnedLinesByLogId,
             [logId]: []
+        }
+    })),
+    setLogBodyViewMode: (mode: LogBodyViewMode) => set(state => (
+        state.logBodyViewMode === mode ? state : { logBodyViewMode: mode }
+    )),
+    toggleCallTreeNode: (logId: string, nodeId: number) => set(state => {
+        const currentCollapsed = state.collapsedCallTreeNodesByLogId[logId] ?? [];
+        const nextCollapsed = currentCollapsed.includes(nodeId)
+            ? currentCollapsed.filter(collapsedId => collapsedId !== nodeId)
+            : [...currentCollapsed, nodeId];
+
+        return {
+            collapsedCallTreeNodesByLogId: {
+                ...state.collapsedCallTreeNodesByLogId,
+                [logId]: nextCollapsed
+            }
+        };
+    }),
+    setCallTreeCollapsedNodes: (logId: string, nodeIds: number[]) => set(state => ({
+        collapsedCallTreeNodesByLogId: {
+            ...state.collapsedCallTreeNodesByLogId,
+            [logId]: nodeIds
         }
     }))
 

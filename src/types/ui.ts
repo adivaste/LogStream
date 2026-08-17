@@ -15,6 +15,11 @@ export enum SortDirection {
     DESC = 'desc'
 }
 
+// --- Log body ----
+// Which view the log panel's body is showing: the raw log text, or the
+// call tree derived from it.
+export type LogBodyViewMode = 'raw' | 'tree';
+
 // --- Logs ----
 export type LogEntry = {
     id: string;

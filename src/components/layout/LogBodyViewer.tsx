@@ -1,15 +1,18 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
     AlertTriangle,
+    AlignLeft,
     Bug,
     Check,
     ChevronDown,
+    ChevronsDownUp,
     ChevronUp,
     Code2,
     Copy,
     Download,
     Gauge,
     Hash,
+    ListTree,
     MoreHorizontal,
     Pin,
     Regex,
@@ -21,9 +24,13 @@ import {
 } from "lucide-react";
 import React from "react";
 
+import { LogCallTree } from "@/components/layout/LogCallTree";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea, ScrollAreaScrollbar, ScrollAreaViewport } from "@/components/ui/scroll-area";
+import { useCallTree } from "@/hooks/useCallTree";
+import { useDelayedLoadingGate } from "@/hooks/useDelayedLoadingGate";
 import { useElementScrollEdges } from "@/hooks/useScrollEdgeFade";
+import { collectCollapsibleNodeIds } from "@/lib/callTreeParser";
 import {
     DEFAULT_LOG_BODY_FONT_SIZE_PX,
     MAX_LOG_BODY_FONT_SIZE_PX,
@@ -38,6 +45,7 @@ import {
 } from "@/lib/logBodyHighlight";
 import { getErrorLineNumbers, parseLimitUsage } from "@/lib/logBodyMeta";
 import { getNextLogIndex } from "@/lib/logListConfig";
+import { useTableUIStore } from "@/store/tableUIStore";
 import { useUIStore } from "@/store/uiStore";
 
 const FONT_SIZE_STEP_PX = 1;
@@ -53,15 +61,21 @@ const CHAR_WIDTH_PROBE_LENGTH = 80;
 
 const EXECUTABLE_LINE_PATTERN = /\|(METHOD_ENTRY|METHOD_EXIT|SOQL_EXECUTE_BEGIN|SOQL_EXECUTE_END|DML_BEGIN|DML_END|USER_DEBUG|EXCEPTION_THROWN|FATAL_ERROR)\|/;
 
+const JUMP_HIGHLIGHT_DURATION_MS = 1600;
+
 type LogBodyViewerProps = {
     body: string;
     fileName: string;
+    logId: string;
     // Source line indexes (0-based, stable across wrap toggling and view
     // filtering - never the virtualizer's own row index, which shifts
     // whenever the debug/executable filter changes which rows exist at all).
     pinnedLines: number[];
     onTogglePinnedLine: (_sourceLineIndex: number) => void;
     onClearPinnedLines: () => void;
+    collapsedCallTreeNodes: number[];
+    onToggleCallTreeNode: (_nodeId: number) => void;
+    onSetCallTreeCollapsedNodes: (_nodeIds: number[]) => void;
 }
 
 type LogViewFilter = 'all' | 'debug' | 'executable';
@@ -74,7 +88,17 @@ const isExecutableLine = (line: string) => {
     return EXECUTABLE_LINE_PATTERN.test(line);
 }
 
-function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClearPinnedLines }: LogBodyViewerProps) {
+function LogBodyViewer({
+    body,
+    fileName,
+    logId,
+    pinnedLines,
+    onTogglePinnedLine,
+    onClearPinnedLines,
+    collapsedCallTreeNodes,
+    onToggleCallTreeNode,
+    onSetCallTreeCollapsedNodes
+}: LogBodyViewerProps) {
     const sectionRef = React.useRef<HTMLElement | null>(null);
     const scrollParentRef = React.useRef<HTMLDivElement | null>(null);
     const charWidthProbeRef = React.useRef<HTMLSpanElement | null>(null);
@@ -97,6 +121,15 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
     const contentWidthPxRef = React.useRef(0);
     const logBodyPreferences = useUIStore(state => state.logBodyPreferences);
     const updateLogBodyPreferences = useUIStore(state => state.updateLogBodyPreferences);
+    const viewMode = useTableUIStore(state => state.logBodyViewMode);
+    const setViewMode = useTableUIStore(state => state.setLogBodyViewMode);
+    // Set when a call-tree row asks to jump into the raw log. The mode swap
+    // has to settle before there's anything to scroll to, so this hands off to
+    // the effect below rather than scrolling inline - the same deferred shape
+    // pendingScrollRef already uses for the filter lift, one stage earlier.
+    const pendingModeScrollRef = React.useRef<number | null>(null);
+    const jumpHighlightTimeoutRef = React.useRef<number | null>(null);
+    const [highlightedJumpLineIndex, setHighlightedJumpLineIndex] = React.useState<number | null>(null);
     const [searchQuery, setSearchQuery] = React.useState('');
     const [isRegexEnabled, setIsRegexEnabled] = React.useState(false);
     const [activeMatchIndex, setActiveMatchIndex] = React.useState(-1);
@@ -498,6 +531,74 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
         lineVirtualizer.scrollToIndex(pendingSourceIndex, { align: 'center' });
     }, [lineVirtualizer, visibleLineIndexes]);
 
+    const callTree = useCallTree(lines, logId, viewMode === 'tree');
+    const shouldShowCallTreeSkeleton = useDelayedLoadingGate(!callTree.isParsing);
+    // The mode switch is only offered once we know there's something to show.
+    const hasCallTree = callTree.tree.roots.length > 0;
+
+    // Whether a log has a call tree at all depends on the trace flag level it
+    // was captured at, so a sticky tree mode has to yield to the log actually
+    // in front of the user rather than stranding them on an empty view.
+    React.useEffect(() => {
+        if (viewMode === 'tree' && !callTree.isParsing && !hasCallTree) {
+            setViewMode('raw');
+        }
+    }, [callTree.isParsing, hasCallTree, setViewMode, viewMode]);
+
+    React.useEffect(() => {
+        return () => {
+            if (jumpHighlightTimeoutRef.current) {
+                window.clearTimeout(jumpHighlightTimeoutRef.current);
+            }
+        };
+    }, []);
+
+    const handleJumpToSourceLine = React.useCallback((sourceLineIndex: number) => {
+        setHighlightedJumpLineIndex(sourceLineIndex);
+
+        if (jumpHighlightTimeoutRef.current) {
+            window.clearTimeout(jumpHighlightTimeoutRef.current);
+        }
+
+        jumpHighlightTimeoutRef.current = window.setTimeout(() => {
+            setHighlightedJumpLineIndex(null);
+        }, JUMP_HIGHLIGHT_DURATION_MS);
+
+        if (viewMode === 'raw') {
+            scrollToSourceIndex(sourceLineIndex);
+            return;
+        }
+
+        pendingModeScrollRef.current = sourceLineIndex;
+        setViewMode('raw');
+    }, [scrollToSourceIndex, setViewMode, viewMode]);
+
+    React.useEffect(() => {
+        if (viewMode !== 'raw') {
+            return;
+        }
+
+        const pendingSourceIndex = pendingModeScrollRef.current;
+
+        if (pendingSourceIndex === null) {
+            return;
+        }
+
+        pendingModeScrollRef.current = null;
+
+        // One frame so the raw body is laid out (it renders `hidden` in tree
+        // mode, so it has no measurable height until this commit paints)
+        // before asking the virtualizer to scroll. Handing off to
+        // scrollToSourceIndex rather than scrolling directly means a target
+        // that's *also* hidden by the debug/executable filter still resolves -
+        // that function arms pendingScrollRef and the effect above finishes it.
+        const frameId = requestAnimationFrame(() => {
+            scrollToSourceIndex(pendingSourceIndex);
+        });
+
+        return () => cancelAnimationFrame(frameId);
+    }, [scrollToSourceIndex, viewMode]);
+
     // Clamp like `activeMatchIndex` does for search matches above - if pins
     // were removed out from under the current position, land on the last
     // valid one instead of pointing past the end of the array.
@@ -790,103 +891,170 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
     return (
         <section ref={sectionRef} className="relative flex min-h-0 flex-1 flex-col border-t border-border">
             <div className="flex items-center gap-2 border-b border-border px-4 py-2">
-                <div className="
+                {/* Leftmost, and the only control here besides "More" with a
+                    text label - this one answers "what am I looking at", so it
+                    shouldn't read as just another filter icon. */}
+                <div
+                    role="group"
+                    aria-label="Log view mode"
+                    className="flex h-8 shrink-0 items-center gap-0.5 rounded-md bg-input/80 p-0.5 dark:bg-input/80"
+                >
+                    {([
+                        { mode: 'raw' as const, icon: AlignLeft, label: 'Raw', isDisabled: false },
+                        { mode: 'tree' as const, icon: ListTree, label: 'Tree', isDisabled: !hasCallTree }
+                    ]).map(({ mode, icon: ModeIcon, label, isDisabled }) => (
+                        <button
+                            key={mode}
+                            type="button"
+                            title={isDisabled ? 'No method entry data in this log' : `${label} view`}
+                            aria-label={`${label} view`}
+                            aria-pressed={viewMode === mode}
+                            disabled={isDisabled}
+                            onClick={() => setViewMode(mode)}
+                            className={`
+                                flex h-7 items-center gap-1.5 rounded-[calc(var(--radius-md)-2px)] px-2 text-xs
+                                font-medium font-sans transition-colors focus-visible:outline-none
+                                focus-visible:ring-1 focus-visible:ring-emerald-500
+                                disabled:cursor-not-allowed disabled:opacity-50
+                                ${viewMode === mode
+                            ? 'bg-background text-emerald-700 shadow-xs dark:text-emerald-300'
+                            : 'text-muted-foreground hover:text-primary'}
+                            `}
+                        >
+                            <ModeIcon size={15} />
+                            {label}
+                        </button>
+                    ))}
+                </div>
+
+                {viewMode === 'raw' && (<>
+                    <div className="
                     flex h-8 min-w-0 flex-1 items-center gap-2 border-0 rounded-md bg-input/80 dark:bg-input/80 px-2
                     focus-within:ring-[2px] focus-within:ring-ring/40
                 ">
-                    <Search size={15} className="shrink-0 text-muted-foreground" />
-                    <input
-                        type="search"
-                        value={searchQuery}
-                        onChange={(event) => setSearchQuery(event.target.value)}
-                        onKeyDown={handleSearchKeyDown}
-                        placeholder="Search log..."
-                        aria-label="Search log body"
-                        className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground font-sans"
-                    />
-                    {trimmedSearchQuery && (
-                        <span
-                            title={isInvalidRegex ? 'Invalid regular expression' : undefined}
-                            className={`shrink-0 font-mono text-[11px] ${isInvalidRegex ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground'}`}
-                        >
-                            {isInvalidRegex
-                                ? 'Invalid regex'
-                                : matchingLineIndexes.length === 0
-                                    ? '0'
-                                    : `${Math.max(activeMatchIndex + 1, 0)}/${matchingLineIndexes.length}`}
-                        </span>
-                    )}
-                    <button
-                        type="button"
-                        title="Regex search"
-                        aria-label="Toggle regex search"
-                        aria-pressed={isRegexEnabled}
-                        onClick={() => setIsRegexEnabled(enabled => !enabled)}
-                        className={`
+                        <Search size={15} className="shrink-0 text-muted-foreground" />
+                        <input
+                            type="search"
+                            value={searchQuery}
+                            onChange={(event) => setSearchQuery(event.target.value)}
+                            onKeyDown={handleSearchKeyDown}
+                            placeholder="Search log..."
+                            aria-label="Search log body"
+                            className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground font-sans"
+                        />
+                        {trimmedSearchQuery && (
+                            <span
+                                title={isInvalidRegex ? 'Invalid regular expression' : undefined}
+                                className={`shrink-0 font-mono text-[11px] ${isInvalidRegex ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground'}`}
+                            >
+                                {isInvalidRegex
+                                    ? 'Invalid regex'
+                                    : matchingLineIndexes.length === 0
+                                        ? '0'
+                                        : `${Math.max(activeMatchIndex + 1, 0)}/${matchingLineIndexes.length}`}
+                            </span>
+                        )}
+                        <button
+                            type="button"
+                            title="Regex search"
+                            aria-label="Toggle regex search"
+                            aria-pressed={isRegexEnabled}
+                            onClick={() => setIsRegexEnabled(enabled => !enabled)}
+                            className={`
                             shrink-0 rounded p-1
                             ${isRegexEnabled ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground hover:text-primary'}
                         `}
-                    >
-                        <Regex size={14} />
-                    </button>
-                </div>
+                        >
+                            <Regex size={14} />
+                        </button>
+                    </div>
 
-                <div className="
+                    <div className="
                     flex h-8 w-32 shrink-0 items-center gap-1.5 border-0 rounded-md bg-input/80 dark:bg-input/80 px-2
                     focus-within:ring-[2px] focus-within:ring-ring/40
                 ">
-                    <Hash size={14} className="shrink-0 text-muted-foreground" />
-                    <input
-                        type="text"
-                        inputMode="numeric"
-                        value={goToLineQuery}
-                        onChange={(event) => setGoToLineQuery(event.target.value)}
-                        onKeyDown={handleGoToLineKeyDown}
-                        placeholder="Apex line #"
-                        aria-label="Go to Apex source line number"
-                        className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground font-sans"
-                    />
-                    {trimmedGoToLineQuery && (
-                        <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
-                            {goToLineSourceIndexes.length === 0
-                                ? '0'
-                                : `${Math.max(activeGoToLineIndex + 1, 0)}/${goToLineSourceIndexes.length}`}
-                        </span>
-                    )}
-                </div>
+                        <Hash size={14} className="shrink-0 text-muted-foreground" />
+                        <input
+                            type="text"
+                            inputMode="numeric"
+                            value={goToLineQuery}
+                            onChange={(event) => setGoToLineQuery(event.target.value)}
+                            onKeyDown={handleGoToLineKeyDown}
+                            placeholder="Apex line #"
+                            aria-label="Go to Apex source line number"
+                            className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground font-sans"
+                        />
+                        {trimmedGoToLineQuery && (
+                            <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+                                {goToLineSourceIndexes.length === 0
+                                    ? '0'
+                                    : `${Math.max(activeGoToLineIndex + 1, 0)}/${goToLineSourceIndexes.length}`}
+                            </span>
+                        )}
+                    </div>
 
-                <button
-                    type="button"
-                    title="Debug lines"
-                    aria-label="Show debug lines only"
-                    aria-pressed={viewFilter === 'debug'}
-                    onClick={() => setViewFilter(viewFilter === 'debug' ? 'all' : 'debug')}
-                    className={getFilterButtonClassName('debug')}
-                >
-                    <Bug size={15} />
-                </button>
+                    <button
+                        type="button"
+                        title="Debug lines"
+                        aria-label="Show debug lines only"
+                        aria-pressed={viewFilter === 'debug'}
+                        onClick={() => setViewFilter(viewFilter === 'debug' ? 'all' : 'debug')}
+                        className={getFilterButtonClassName('debug')}
+                    >
+                        <Bug size={15} />
+                    </button>
 
-                <button
-                    type="button"
-                    title="Executable lines"
-                    aria-label="Show executable lines only"
-                    aria-pressed={viewFilter === 'executable'}
-                    onClick={() => setViewFilter(viewFilter === 'executable' ? 'all' : 'executable')}
-                    className={getFilterButtonClassName('executable')}
-                >
-                    <Code2 size={15} />
-                </button>
+                    <button
+                        type="button"
+                        title="Executable lines"
+                        aria-label="Show executable lines only"
+                        aria-pressed={viewFilter === 'executable'}
+                        onClick={() => setViewFilter(viewFilter === 'executable' ? 'all' : 'executable')}
+                        className={getFilterButtonClassName('executable')}
+                    >
+                        <Code2 size={15} />
+                    </button>
 
-                <button
-                    type="button"
-                    title="Wrap lines"
-                    aria-label="Toggle line wrapping"
-                    aria-pressed={isWrapEnabled}
-                    onClick={() => setIsWrapEnabled(wrapped => !wrapped)}
-                    className={getActionButtonClassName(isWrapEnabled)}
-                >
-                    <WrapText size={15} />
-                </button>
+                    <button
+                        type="button"
+                        title="Wrap lines"
+                        aria-label="Toggle line wrapping"
+                        aria-pressed={isWrapEnabled}
+                        onClick={() => setIsWrapEnabled(wrapped => !wrapped)}
+                        className={getActionButtonClassName(isWrapEnabled)}
+                    >
+                        <WrapText size={15} />
+                    </button>
+                </>)}
+
+                {/* Tree-only. Search/go-to-line/filters/wrap all mean "find or
+                    reshape a raw text line", which has no meaning over frames,
+                    so they're hidden above rather than left inert. */}
+                {viewMode === 'tree' && (<>
+                    <div className="min-w-0 flex-1" />
+
+                    <button
+                        type="button"
+                        title="Expand all frames"
+                        aria-label="Expand all frames"
+                        onClick={() => onSetCallTreeCollapsedNodes([])}
+                        className={getActionButtonClassName()}
+                    >
+                        <ChevronsDownUp size={15} className="rotate-180" />
+                    </button>
+
+                    <button
+                        type="button"
+                        title="Collapse all frames"
+                        aria-label="Collapse all frames"
+                        onClick={() => onSetCallTreeCollapsedNodes(
+                            collectCollapsibleNodeIds(callTree.aggregatedRoots, 0)
+                        )}
+                        className={getActionButtonClassName()}
+                    >
+                        <ChevronsDownUp size={15} />
+                    </button>
+                </>)}
 
                 {/* Only worth showing once there's something to show - a log
                     with no parsed CUMULATIVE_LIMIT_USAGE block (purged, or an
@@ -1027,130 +1195,160 @@ function LogBodyViewer({ body, fileName, pinnedLines, onTogglePinnedLine, onClea
                 </div>
             )}
 
-            <ScrollArea className="min-h-0 flex-1 bg-sidebar font-mono text-sm">
-                <ScrollAreaViewport ref={scrollParentRef} className="overscroll-contain">
-                    <span
-                        ref={charWidthProbeRef}
-                        aria-hidden="true"
-                        className="pointer-events-none invisible absolute left-0 top-0 whitespace-pre text-sm"
-                    >
-                        {'M'.repeat(CHAR_WIDTH_PROBE_LENGTH)}
-                    </span>
+            {/* The raw body stays mounted in tree mode and is hidden with CSS
+                rather than unmounted: a hidden scroll container has no height,
+                so its virtualizer renders no rows (near-zero cost), and this
+                avoids the remount-then-scroll fragility that jumping from a
+                tree row back into the raw log would otherwise hit. */}
+            <div className={`flex min-h-0 flex-1 flex-col ${viewMode === 'tree' ? 'hidden' : ''}`}>
+                <ScrollArea className="min-h-0 flex-1 bg-sidebar font-mono text-sm">
+                    <ScrollAreaViewport ref={scrollParentRef} className="overscroll-contain">
+                        <span
+                            ref={charWidthProbeRef}
+                            aria-hidden="true"
+                            className="pointer-events-none invisible absolute left-0 top-0 whitespace-pre text-sm"
+                        >
+                            {'M'.repeat(CHAR_WIDTH_PROBE_LENGTH)}
+                        </span>
 
-                    {/* Sticky within the scrolling ancestor above, not the page -
+                        {/* Sticky within the scrolling ancestor above, not the page -
                         fades in only once there's cut-off content in that direction. */}
-                    <div
-                        aria-hidden="true"
-                        className={`
+                        <div
+                            aria-hidden="true"
+                            className={`
                             pointer-events-none sticky top-0 z-10 -mb-4 h-4
                             bg-gradient-to-b from-sidebar to-transparent
                             transition-opacity duration-150
                             ${scrollEdges.atTop ? 'opacity-0' : 'opacity-100'}
                         `}
-                    />
+                        />
 
-                    <div
-                        className="relative"
-                        style={{ height: `${lineVirtualizer.getTotalSize()}px` }}
-                    >
-                        {virtualLines.map((virtualLine) => {
-                            const sourceLineIndex = getSourceLineIndex(virtualLine.index);
-                            const line = lines[sourceLineIndex] ?? '';
-                            const lineNumber = sourceLineIndex + 1;
-                            const isActiveMatchLine = virtualLine.index === activeMatchLineIndex;
-                            const isPinned = pinnedLineSet.has(sourceLineIndex);
-                            const isErrorLine = errorLineSet.has(sourceLineIndex);
+                        <div
+                            className="relative"
+                            style={{ height: `${lineVirtualizer.getTotalSize()}px` }}
+                        >
+                            {virtualLines.map((virtualLine) => {
+                                const sourceLineIndex = getSourceLineIndex(virtualLine.index);
+                                const line = lines[sourceLineIndex] ?? '';
+                                const lineNumber = sourceLineIndex + 1;
+                                const isActiveMatchLine = virtualLine.index === activeMatchLineIndex;
+                                const isPinned = pinnedLineSet.has(sourceLineIndex);
+                                const isJumpTarget = highlightedJumpLineIndex === sourceLineIndex;
+                                const isErrorLine = errorLineSet.has(sourceLineIndex);
 
-                            return (
-                                <div
-                                    key={virtualLine.key}
-                                    data-index={virtualLine.index}
-                                    ref={(element) => {
-                                        setRowRef(sourceLineIndex, element);
+                                return (
+                                    <div
+                                        key={virtualLine.key}
+                                        data-index={virtualLine.index}
+                                        ref={(element) => {
+                                            setRowRef(sourceLineIndex, element);
 
-                                        if (isWrapEnabled) {
-                                            lineVirtualizer.measureElement(element);
-                                        }
-                                    }}
-                                    tabIndex={sourceLineIndex === rovingSourceLineIndex ? 0 : -1}
-                                    aria-label={`Line ${lineNumber}`}
-                                    onKeyDown={(event) => handleRowKeyDown(event, sourceLineIndex)}
-                                    onFocus={() => handleRowFocus(sourceLineIndex)}
-                                    className={`
+                                            if (isWrapEnabled) {
+                                                lineVirtualizer.measureElement(element);
+                                            }
+                                        }}
+                                        tabIndex={sourceLineIndex === rovingSourceLineIndex ? 0 : -1}
+                                        aria-label={`Line ${lineNumber}`}
+                                        onKeyDown={(event) => handleRowKeyDown(event, sourceLineIndex)}
+                                        onFocus={() => handleRowFocus(sourceLineIndex)}
+                                        className={`
                                         absolute left-0 top-0 grid
                                         ${isWrapEnabled
-                                    ? 'w-full grid-cols-[4.5rem_minmax(0,1fr)] items-start'
-                                    : 'min-w-full grid-cols-[4.5rem_max-content] whitespace-pre'}
-                                        ${isActiveMatchLine ? 'bg-orange-500/10' : isErrorLine ? 'bg-red-500/10' : isPinned ? 'bg-emerald-500/10' : ''}
+                                        ? 'w-full grid-cols-[4.5rem_minmax(0,1fr)] items-start'
+                                        : 'min-w-full grid-cols-[4.5rem_max-content] whitespace-pre'}
+                                        transition-colors duration-300
+                                        ${isActiveMatchLine
+                                        ? 'bg-orange-500/10'
+                                        : isJumpTarget
+                                            ? 'bg-sky-500/15'
+                                            : isErrorLine
+                                                ? 'bg-red-500/10'
+                                                : isPinned ? 'bg-emerald-500/10' : ''}
                                         outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-emerald-500
                                     `}
-                                    style={{
+                                        style={{
                                         // Fixed-height rows are cheap to position with a fixed height;
                                         // wrapped rows are measured, so let content define the height
                                         // instead of forcing the (now stale) estimate.
-                                        height: isWrapEnabled ? undefined : `${virtualLine.size}px`,
-                                        transform: `translateY(${virtualLine.start}px)`,
-                                        // The accent bar stays even when a search match's orange
-                                        // background is winning the row's bg color above - it's the
-                                        // one marker that always says "this line is pinned/an error"
-                                        // regardless of whatever else is highlighting the row right
-                                        // now. A pin is a deliberate user mark, so it wins the bar over
-                                        // an auto-detected error on the rare line that's both.
-                                        boxShadow: isPinned
-                                            ? 'inset 3px 0 0 0 var(--color-emerald-500)'
-                                            : isErrorLine
-                                                ? 'inset 3px 0 0 0 var(--color-red-500)'
-                                                : undefined
-                                    }}
-                                >
-                                    <div
-                                        role="button"
-                                        title={isPinned ? `Unpin line ${lineNumber}` : `Pin line ${lineNumber}`}
-                                        aria-label={isPinned ? `Unpin line ${lineNumber}` : `Pin line ${lineNumber}`}
-                                        aria-pressed={isPinned}
-                                        onClick={() => onTogglePinnedLine(sourceLineIndex)}
-                                        style={{ fontSize: `${fontSizePx}px`, lineHeight: `${lineHeightPx}px` }}
-                                        className={`
+                                            height: isWrapEnabled ? undefined : `${virtualLine.size}px`,
+                                            transform: `translateY(${virtualLine.start}px)`,
+                                            // The accent bar stays even when a search match's orange
+                                            // background is winning the row's bg color above - it's the
+                                            // one marker that always says "this line is pinned/an error"
+                                            // regardless of whatever else is highlighting the row right
+                                            // now. A pin is a deliberate user mark, so it wins the bar over
+                                            // an auto-detected error on the rare line that's both.
+                                            boxShadow: isPinned
+                                                ? 'inset 3px 0 0 0 var(--color-emerald-500)'
+                                                : isErrorLine
+                                                    ? 'inset 3px 0 0 0 var(--color-red-500)'
+                                                    : undefined
+                                        }}
+                                    >
+                                        <div
+                                            role="button"
+                                            title={isPinned ? `Unpin line ${lineNumber}` : `Pin line ${lineNumber}`}
+                                            aria-label={isPinned ? `Unpin line ${lineNumber}` : `Pin line ${lineNumber}`}
+                                            aria-pressed={isPinned}
+                                            onClick={() => onTogglePinnedLine(sourceLineIndex)}
+                                            style={{ fontSize: `${fontSizePx}px`, lineHeight: `${lineHeightPx}px` }}
+                                            className={`
                                             sticky left-0 z-10 cursor-pointer select-none border-r pr-3 text-right
                                             transition-colors
                                             ${isPinned
-                                    ? 'border-border bg-emerald-500/10 font-medium text-emerald-700 dark:text-emerald-300'
-                                    : isErrorLine
-                                        ? 'border-border bg-red-500/10 font-medium text-red-700 dark:text-red-400'
-                                        : 'border-border/70 bg-sidebar text-muted-foreground/70 hover:bg-muted/60 hover:text-muted-foreground'}
+                                        ? 'border-border bg-emerald-500/10 font-medium text-emerald-700 dark:text-emerald-300'
+                                        : isErrorLine
+                                            ? 'border-border bg-red-500/10 font-medium text-red-700 dark:text-red-400'
+                                            : 'border-border/70 bg-sidebar text-muted-foreground/70 hover:bg-muted/60 hover:text-muted-foreground'}
                                         `}
-                                    >
-                                        {lineNumber}
+                                        >
+                                            {lineNumber}
+                                        </div>
+                                        <div
+                                            style={{ fontSize: `${fontSizePx}px`, lineHeight: `${lineHeightPx}px` }}
+                                            className={`px-3 text-muted-foreground ${isWrapEnabled ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'}`}
+                                        >
+                                            {renderHighlightedLine(line, deferredSearchQuery, deferredSearchPattern)}
+                                        </div>
                                     </div>
-                                    <div
-                                        style={{ fontSize: `${fontSizePx}px`, lineHeight: `${lineHeightPx}px` }}
-                                        className={`px-3 text-muted-foreground ${isWrapEnabled ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'}`}
-                                    >
-                                        {renderHighlightedLine(line, deferredSearchQuery, deferredSearchPattern)}
-                                    </div>
-                                </div>
-                            );
-                        })}
-                    </div>
+                                );
+                            })}
+                        </div>
 
-                    <div
-                        aria-hidden="true"
-                        className={`
+                        <div
+                            aria-hidden="true"
+                            className={`
                             pointer-events-none sticky bottom-0 z-10 -mt-4 h-4
                             bg-gradient-to-t from-sidebar to-transparent
                             transition-opacity duration-150
                             ${scrollEdges.atBottom ? 'opacity-0' : 'opacity-100'}
                         `}
-                    />
-                </ScrollAreaViewport>
-                <ScrollAreaScrollbar />
-            </ScrollArea>
+                        />
+                    </ScrollAreaViewport>
+                    <ScrollAreaScrollbar />
+                </ScrollArea>
+            </div>
+
+            {viewMode === 'tree' && (
+                <LogCallTree
+                    tree={callTree.tree}
+                    aggregatedRoots={callTree.aggregatedRoots}
+                    isParsing={callTree.isParsing}
+                    showSkeleton={callTree.isParsing && shouldShowCallTreeSkeleton}
+                    fontSizePx={fontSizePx}
+                    lineHeightPx={lineHeightPx}
+                    collapsedNodeIds={collapsedCallTreeNodes}
+                    onToggleCollapsed={onToggleCallTreeNode}
+                    onSetCollapsedNodes={onSetCallTreeCollapsedNodes}
+                    onJumpToSourceLine={handleJumpToSourceLine}
+                />
+            )}
 
             {/* Only rendered once there's a pin or an error to navigate - no
                 permanent chrome for a feature that isn't in use on this log.
                 One bar, bottom-right, instead of separate pin/error bars -
                 the icon button flips which set is active when both exist. */}
-            {(sortedPinnedLines.length > 0 || errorSourceLineIndexes.length > 0) && (() => {
+            {viewMode === 'raw' && (sortedPinnedLines.length > 0 || errorSourceLineIndexes.length > 0) && (() => {
                 const isErrorMode = navigatorMode === 'errors' && errorSourceLineIndexes.length > 0;
                 const canToggleMode = sortedPinnedLines.length > 0 && errorSourceLineIndexes.length > 0;
                 const activeCount = isErrorMode ? errorSourceLineIndexes.length : sortedPinnedLines.length;
