@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { aggregateCallTree, parseCallTree } from "./callTreeParser";
+import { aggregateCallTree, hasTreeableEvents, parseCallTree } from "./callTreeParser";
 
 // Nanoseconds are what the real log carries; these helpers keep the fixtures
 // readable in milliseconds so the expected timings are obvious at a glance.
@@ -146,6 +146,55 @@ describe('parseCallTree', () => {
         expect(unit.apexLine).toBeNull();
         expect(unit.label).toBe('AccountTrigger on Account');
         expect(unit.totalMs).toBe(90);
+    });
+});
+
+describe('hasTreeableEvents', () => {
+    // This gates whether the Tree toggle is enabled, and it has to answer
+    // without parsing - the parse only runs once tree mode is already active,
+    // so deriving the toggle from parse output deadlocks.
+    it('detects a log that has frames to build a tree from', () => {
+        const body = [
+            at(0, 'METHOD_ENTRY|[12]|01p|Outer.run()'),
+            at(50, 'METHOD_EXIT|[12]|01p|Outer.run()')
+        ].join('\n');
+
+        expect(hasTreeableEvents(body)).toBe(true);
+    });
+
+    it('detects SOQL/DML-only logs, which still make a useful flat tree', () => {
+        const soqlOnly = at(0, 'SOQL_EXECUTE_BEGIN|[15]|Aggregations:0|SELECT Id FROM Account');
+        const dmlOnly = at(0, 'DML_BEGIN|[20]|Op:Update|Type:Account|Rows:3');
+
+        expect(hasTreeableEvents(soqlOnly)).toBe(true);
+        expect(hasTreeableEvents(dmlOnly)).toBe(true);
+    });
+
+    it('rejects a log with only non-frame events', () => {
+        const body = [
+            at(0, 'USER_DEBUG|[30]|DEBUG|hello'),
+            at(10, 'HEAP_ALLOCATE|[31]|Bytes:8'),
+            at(20, 'FATAL_ERROR|System.NullPointerException')
+        ].join('\n');
+
+        expect(hasTreeableEvents(body)).toBe(false);
+    });
+
+    it('rejects an empty body', () => {
+        expect(hasTreeableEvents('')).toBe(false);
+    });
+
+    it('agrees with the parser about whether roots exist', () => {
+        const withFrames = [
+            at(0, 'METHOD_ENTRY|[12]|01p|Outer.run()'),
+            at(50, 'METHOD_EXIT|[12]|01p|Outer.run()')
+        ];
+        const withoutFrames = [at(0, 'USER_DEBUG|[30]|DEBUG|hello')];
+
+        expect(hasTreeableEvents(withFrames.join('\n')))
+            .toBe(parseCallTree(withFrames).roots.length > 0);
+        expect(hasTreeableEvents(withoutFrames.join('\n')))
+            .toBe(parseCallTree(withoutFrames).roots.length > 0);
     });
 });
 

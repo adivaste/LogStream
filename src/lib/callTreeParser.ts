@@ -101,6 +101,25 @@ const EVENT_SPECS = new Map<string, EventSpec>([
     ['FLOW_START_INTERVIEW_END', { role: 'exit', kind: 'flow' }]
 ]);
 
+// Substrings that prove a log contains at least one frame worth building a
+// tree from. Deliberately checked against the raw body with String.includes
+// (SIMD-accelerated in V8, no line splitting, early-exits on the first hit)
+// rather than by parsing: the full parse is lazy and only runs once the user
+// is already in tree mode, so anything gating *entry* to tree mode has to be
+// answerable without it.
+const TREEABLE_EVENT_MARKERS = [
+    '|METHOD_ENTRY|',
+    '|CODE_UNIT_STARTED|',
+    '|SOQL_EXECUTE_BEGIN|',
+    '|DML_BEGIN|',
+    '|CALLOUT_REQUEST|',
+    '|FLOW_START_INTERVIEW_BEGIN|'
+];
+
+export const hasTreeableEvents = (body: string) => {
+    return TREEABLE_EVENT_MARKERS.some(marker => body.includes(marker));
+}
+
 // A pathological log must not make the exit-matching scan quadratic.
 const MAX_UNWIND_SCAN = 32;
 // Bounds worst-case memory on a runaway log. Real Apex stacks never approach

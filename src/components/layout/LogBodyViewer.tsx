@@ -30,7 +30,7 @@ import { ScrollArea, ScrollAreaScrollbar, ScrollAreaViewport } from "@/component
 import { useCallTree } from "@/hooks/useCallTree";
 import { useDelayedLoadingGate } from "@/hooks/useDelayedLoadingGate";
 import { useElementScrollEdges } from "@/hooks/useScrollEdgeFade";
-import { collectCollapsibleNodeIds } from "@/lib/callTreeParser";
+import { collectCollapsibleNodeIds, hasTreeableEvents } from "@/lib/callTreeParser";
 import {
     DEFAULT_LOG_BODY_FONT_SIZE_PX,
     MAX_LOG_BODY_FONT_SIZE_PX,
@@ -531,19 +531,24 @@ function LogBodyViewer({
         lineVirtualizer.scrollToIndex(pendingSourceIndex, { align: 'center' });
     }, [lineVirtualizer, visibleLineIndexes]);
 
+    // Derived from the raw body, NOT from the parse result: the parse is lazy
+    // and only runs once tree mode is active, so gating entry to tree mode on
+    // it would deadlock (no tree until you switch, no switch until there's a
+    // tree). A substring probe answers the same question without parsing.
+    const hasCallTree = React.useMemo(() => hasTreeableEvents(body), [body]);
     const callTree = useCallTree(lines, logId, viewMode === 'tree');
     const shouldShowCallTreeSkeleton = useDelayedLoadingGate(!callTree.isParsing);
-    // The mode switch is only offered once we know there's something to show.
-    const hasCallTree = callTree.tree.roots.length > 0;
 
     // Whether a log has a call tree at all depends on the trace flag level it
     // was captured at, so a sticky tree mode has to yield to the log actually
-    // in front of the user rather than stranding them on an empty view.
+    // in front of the user rather than stranding them on an empty view. Uses
+    // the same probe as the toggle above so this can't fight it: a log that
+    // enables the button is never bounced straight back out of tree mode.
     React.useEffect(() => {
-        if (viewMode === 'tree' && !callTree.isParsing && !hasCallTree) {
+        if (viewMode === 'tree' && !hasCallTree) {
             setViewMode('raw');
         }
-    }, [callTree.isParsing, hasCallTree, setViewMode, viewMode]);
+    }, [hasCallTree, setViewMode, viewMode]);
 
     React.useEffect(() => {
         return () => {
