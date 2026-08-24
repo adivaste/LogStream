@@ -2,6 +2,7 @@ import {
     DEFAULT_LIVE_LOG_IDLE_TIMEOUT_MS,
     DEFAULT_LIVE_LOG_POLL_INTERVAL_MS
 } from "@/lib/livePollingConfig";
+import { buildDefaultLogicExpression } from "@/lib/filterLogicExpression";
 import {
     type AdvancedLogFilter,
     type FilterOperator,
@@ -109,7 +110,6 @@ const normalizeAdvancedFilter = (value: unknown): AdvancedLogFilter => {
         return EMPTY_ADVANCED_FILTER;
     }
 
-    const conjunction = value.conjunction === 'or' ? 'or' : 'and';
     const rawConditions = Array.isArray(value.conditions) ? value.conditions : [];
     const conditions = rawConditions.flatMap((rawCondition, index) => {
         if (!isObject(rawCondition)) {
@@ -143,7 +143,18 @@ const normalizeAdvancedFilter = (value: unknown): AdvancedLogFilter => {
         }];
     });
 
-    return { conjunction, conditions };
+    if (typeof value.logic === 'string') {
+        return { logic: value.logic, conditions };
+    }
+
+    // Migrates filters stored before the logic expression replaced the
+    // all/any toggle. "all" is the blank-expression default, so only "any"
+    // needs writing out.
+    const logic = value.conjunction === 'or'
+        ? buildDefaultLogicExpression(conditions.length).replace(/ AND /g, ' OR ')
+        : '';
+
+    return { logic, conditions };
 }
 
 const isTheme = (value: unknown): value is Theme => {

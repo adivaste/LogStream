@@ -1,3 +1,8 @@
+import {
+    type FilterLogicNode,
+    evaluateFilterLogic,
+    parseFilterLogic
+} from "@/lib/filterLogicExpression";
 import type { LogEntry } from "@/types/ui";
 
 // The advanced filter: a flat list of typed conditions joined by a single
@@ -40,6 +45,11 @@ const RELATIVE_UNIT_MS: Record<RelativeTimeUnit, number> = {
 
 export type FilterConjunction = 'and' | 'or';
 
+export type FilterLogicState =
+    | { status: 'default'; node: null; error: null; referencedIndexes: number[] }
+    | { status: 'valid'; node: FilterLogicNode; error: null; referencedIndexes: number[] }
+    | { status: 'invalid'; node: null; error: string; referencedIndexes: number[] };
+
 export type FilterCondition = {
     // Stable across edits so React keys don't churn while typing.
     id: string;
@@ -60,12 +70,16 @@ export type FilterCondition = {
 }
 
 export type AdvancedLogFilter = {
-    conjunction: FilterConjunction;
+    // A boolean expression over the 1-based condition numbers shown in the
+    // UI, e.g. "1 AND 2 AND (3 OR 4)". Blank means "AND everything", which
+    // keeps the simple case simple - you only write an expression when you
+    // actually need grouping.
+    logic: string;
     conditions: FilterCondition[];
 }
 
 export const EMPTY_ADVANCED_FILTER: AdvancedLogFilter = {
-    conjunction: 'and',
+    logic: '',
     conditions: []
 };
 
@@ -403,20 +417,58 @@ export const evaluateCondition = (
     }
 }
 
+// Resolves the filter's logic expression once, so a whole list pass doesn't
+// re-parse it per row. Also drives the UI's validation message.
+export const resolveFilterLogic = (filter: AdvancedLogFilter): FilterLogicState => {
+    if (filter.logic.trim() === '') {
+        return { status: 'default', node: null, error: null, referencedIndexes: [] };
+    }
+
+    const parsed = parseFilterLogic(filter.logic, filter.conditions.length);
+
+    if (!parsed.ok) {
+        return { status: 'invalid', node: null, error: parsed.error, referencedIndexes: [] };
+    }
+
+    return {
+        status: 'valid',
+        node: parsed.node,
+        error: null,
+        referencedIndexes: parsed.referencedIndexes
+    };
+}
+
 export const matchesAdvancedFilter = (
     log: LogEntry,
     filter: AdvancedLogFilter,
-    nowMs: number = Date.now()
+    nowMs: number = Date.now(),
+    logicState: FilterLogicState = resolveFilterLogic(filter)
 ) => {
-    const activeConditions = getActiveConditions(filter);
-
-    if (activeConditions.length === 0) {
+    // A broken expression pauses filtering rather than hiding everything -
+    // you're mid-edit, and an unreadable expression is not a statement that
+    // nothing should match.
+    if (logicState.status === 'invalid') {
         return true;
     }
 
-    return filter.conjunction === 'and'
-        ? activeConditions.every(condition => evaluateCondition(log, condition, nowMs))
-        : activeConditions.some(condition => evaluateCondition(log, condition, nowMs));
+    if (logicState.status === 'default') {
+        const activeConditions = getActiveConditions(filter);
+
+        return activeConditions.length === 0
+            || activeConditions.every(condition => evaluateCondition(log, condition, nowMs));
+    }
+
+    // Positional, because the expression references row numbers. An
+    // incomplete row evaluates to `true` so it stays neutral under AND; if
+    // it's referenced anywhere the UI flags it, which is a better place to
+    // raise the problem than silently emptying the list.
+    const conditionResults = filter.conditions.map(condition => (
+        isConditionComplete(condition)
+            ? evaluateCondition(log, condition, nowMs)
+            : true
+    ));
+
+    return evaluateFilterLogic(logicState.node, conditionResults);
 }
 
 // Distinct values actually present in the loaded logs, for enum fields. Built

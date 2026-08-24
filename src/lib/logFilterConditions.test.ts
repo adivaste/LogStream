@@ -9,7 +9,8 @@ import {
     getEnumOptions,
     getOperatorsForField,
     isConditionComplete,
-    matchesAdvancedFilter
+    matchesAdvancedFilter,
+    resolveFilterLogic
 } from "./logFilterConditions";
 import type { LogEntry } from "@/types/ui";
 
@@ -50,8 +51,8 @@ const condition = (
 
 const filterOf = (
     conditions: FilterCondition[],
-    conjunction: AdvancedLogFilter['conjunction'] = 'and'
-): AdvancedLogFilter => ({ conjunction, conditions });
+    logic = ''
+): AdvancedLogFilter => ({ logic, conditions });
 
 describe('isConditionComplete', () => {
     // The list must not blank out the instant a field is picked but before a
@@ -151,18 +152,18 @@ describe('matchesAdvancedFilter', () => {
         expect(matchesAdvancedFilter(failed, filter)).toBe(true);
     });
 
-    it('honours the and/or conjunction', () => {
+    it('ANDs every condition when the logic expression is blank', () => {
         const log = buildLog({ operation: 'AccountTrigger', durationMs: 450 });
         const conditions = [
             { ...condition('operation', 'contains', 'Trigger'), id: 'a' },
             { ...condition('durationMs', 'greaterThan', '1000'), id: 'b' }
         ];
 
-        expect(matchesAdvancedFilter(log, filterOf(conditions, 'and'))).toBe(false);
-        expect(matchesAdvancedFilter(log, filterOf(conditions, 'or'))).toBe(true);
+        expect(matchesAdvancedFilter(log, filterOf(conditions))).toBe(false);
+        expect(matchesAdvancedFilter(log, filterOf(conditions, '1 OR 2'))).toBe(true);
     });
 
-    it('ignores incomplete conditions under OR instead of matching everything', () => {
+    it('ignores incomplete conditions under the blank default', () => {
         const log = buildLog({ operation: 'AccountTrigger' });
         // The empty condition must not count as a match and pull in every log.
         const conditions = [
@@ -170,7 +171,80 @@ describe('matchesAdvancedFilter', () => {
             { ...condition('user', 'contains', ''), id: 'b' }
         ];
 
-        expect(matchesAdvancedFilter(log, filterOf(conditions, 'or'))).toBe(false);
+        expect(matchesAdvancedFilter(log, filterOf(conditions))).toBe(false);
+    });
+});
+
+describe('filter logic expression', () => {
+    const slowTrigger = () => [
+        { ...condition('operation', 'contains', 'Trigger'), id: 'a' },
+        { ...condition('status', 'notEquals', 'Success'), id: 'b' },
+        { ...condition('durationMs', 'greaterThan', '1000'), id: 'c' },
+        { ...condition('hasErrors', 'isTrue'), id: 'd' }
+    ];
+
+    it('applies grouping the blank default cannot express', () => {
+        // "1 AND 2 AND (3 OR 4)" - a failing trigger that was either slow or
+        // errored. No all/any toggle can say this.
+        const filter = filterOf(slowTrigger(), '1 AND 2 AND (3 OR 4)');
+        const slow = buildLog({
+            operation: 'AccountTrigger', status: 'OperationFailed', durationMs: 5000, hasErrors: false
+        });
+        const errored = buildLog({
+            operation: 'AccountTrigger', status: 'OperationFailed', durationMs: 10, hasErrors: true
+        });
+        const neither = buildLog({
+            operation: 'AccountTrigger', status: 'OperationFailed', durationMs: 10, hasErrors: false
+        });
+
+        expect(matchesAdvancedFilter(slow, filter)).toBe(true);
+        expect(matchesAdvancedFilter(errored, filter)).toBe(true);
+        expect(matchesAdvancedFilter(neither, filter)).toBe(false);
+    });
+
+    it('ignores conditions the expression does not reference', () => {
+        // Condition 3 would exclude this log, but the expression never uses it.
+        const filter = filterOf(slowTrigger(), '1 AND 2');
+        const log = buildLog({
+            operation: 'AccountTrigger', status: 'OperationFailed', durationMs: 10, hasErrors: false
+        });
+
+        expect(matchesAdvancedFilter(log, filter)).toBe(true);
+    });
+
+    it('supports NOT', () => {
+        const filter = filterOf(slowTrigger(), 'NOT 4');
+
+        expect(matchesAdvancedFilter(buildLog({ hasErrors: true }), filter)).toBe(false);
+        expect(matchesAdvancedFilter(buildLog({ hasErrors: false }), filter)).toBe(true);
+    });
+
+    it('pauses filtering rather than hiding everything when the expression is broken', () => {
+        // Mid-typing must not blank the list - an unreadable expression is not
+        // a statement that nothing should match.
+        const filter = filterOf(slowTrigger(), '1 AND (2 OR');
+
+        expect(resolveFilterLogic(filter).status).toBe('invalid');
+        expect(matchesAdvancedFilter(buildLog({ operation: 'Nothing' }), filter)).toBe(true);
+    });
+
+    it('keeps a referenced-but-incomplete condition neutral', () => {
+        const conditions = [
+            { ...condition('operation', 'contains', 'Trigger'), id: 'a' },
+            { ...condition('user', 'contains', ''), id: 'b' }
+        ];
+        const filter = filterOf(conditions, '1 AND 2');
+
+        // 2 is incomplete, so it must not veto a log that satisfies 1.
+        expect(matchesAdvancedFilter(buildLog({ operation: 'AccountTrigger' }), filter)).toBe(true);
+        expect(matchesAdvancedFilter(buildLog({ operation: 'Something' }), filter)).toBe(false);
+    });
+
+    it('reports validation state for the UI', () => {
+        expect(resolveFilterLogic(filterOf(slowTrigger())).status).toBe('default');
+        expect(resolveFilterLogic(filterOf(slowTrigger(), '1 AND 2')).status).toBe('valid');
+        expect(resolveFilterLogic(filterOf(slowTrigger(), '1 AND 9')).error)
+            .toContain("Condition 9 doesn't exist");
     });
 });
 

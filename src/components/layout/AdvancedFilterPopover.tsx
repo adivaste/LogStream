@@ -4,10 +4,10 @@ import React from "react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { buildDefaultLogicExpression } from "@/lib/filterLogicExpression";
 import {
     type AdvancedLogFilter,
     type FilterCondition,
-    type FilterConjunction,
     type FilterOperator,
     type RelativeTimeUnit,
     FILTER_FIELDS,
@@ -22,7 +22,8 @@ import {
     operatorIsRelativeTime,
     operatorNeedsSecondValue,
     operatorNeedsValue,
-    operatorUsesValueList
+    operatorUsesValueList,
+    resolveFilterLogic
 } from "@/lib/logFilterConditions";
 import type { LogEntry } from "@/types/ui";
 
@@ -43,6 +44,8 @@ type AdvancedFilterPopoverProps = {
 
 type ConditionRowProps = {
     condition: FilterCondition;
+    position: number;
+    isReferenced: boolean;
     logs: LogEntry[];
     onChange: (_condition: FilterCondition) => void;
     onRemove: () => void;
@@ -135,7 +138,14 @@ function ValueListPicker({ selected, options, onChange }: ValueListPickerProps) 
     );
 }
 
-function ConditionRow({ condition, logs, onChange, onRemove }: ConditionRowProps) {
+function ConditionRow({
+    condition,
+    position,
+    isReferenced,
+    logs,
+    onChange,
+    onRemove
+}: ConditionRowProps) {
     const field = getFilterField(condition.field);
     const operators = getOperatorsForField(condition.field);
     const pickerOptions = React.useMemo(
@@ -170,6 +180,21 @@ function ConditionRow({ condition, logs, onChange, onRemove }: ConditionRowProps
 
     return (
         <div className="flex items-center gap-1.5">
+            {/* The number the logic expression refers to. Dimmed when the
+                expression doesn't mention it, so an orphaned row is visible
+                rather than quietly doing nothing. */}
+            <span
+                title={isReferenced ? `Condition ${position}` : `Condition ${position} - not used by the filter logic`}
+                className={`
+                    flex size-5 shrink-0 items-center justify-center rounded text-[10px] font-medium tabular-nums
+                    ${isReferenced
+            ? 'bg-muted text-muted-foreground'
+            : 'bg-transparent text-muted-foreground/40 ring-1 ring-inset ring-border'}
+                `}
+            >
+                {position}
+            </span>
+
             <Select value={condition.field} onValueChange={handleFieldChange}>
                 <SelectTrigger aria-label="Filter field" className="w-[7.5rem] shrink-0">
                     <SelectValue />
@@ -361,6 +386,17 @@ function ConditionRow({ condition, logs, onChange, onRemove }: ConditionRowProps
 function AdvancedFilterPopover({ logs, filter, onChange, onClear }: AdvancedFilterPopoverProps) {
     const [isOpen, setIsOpen] = React.useState(false);
     const activeCount = getActiveConditionCount(filter);
+    const logicState = React.useMemo(() => resolveFilterLogic(filter), [filter]);
+    const defaultLogicExpression = buildDefaultLogicExpression(filter.conditions.length);
+    // `null` means the blank-expression default, where every condition counts.
+    const referencedSet = logicState.status === 'valid'
+        ? new Set(logicState.referencedIndexes)
+        : null;
+    const unreferencedPositions = referencedSet === null
+        ? []
+        : filter.conditions
+            .map((_, index) => index + 1)
+            .filter(position => !referencedSet.has(position));
 
     const updateCondition = (nextCondition: FilterCondition) => {
         onChange({
@@ -416,28 +452,9 @@ function AdvancedFilterPopover({ logs, filter, onChange, onClear }: AdvancedFilt
                 className="w-[36rem] max-w-[calc(100vw-2rem)] border border-border bg-popover px-3 py-3 font-sans shadow-lg"
             >
                 <div className="mb-3 flex items-center justify-between gap-2">
-                    <label className="inline-flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                        Match
-                        <Select
-                            value={filter.conjunction}
-                            onValueChange={(conjunction) => onChange({
-                                ...filter,
-                                conjunction: conjunction as FilterConjunction
-                            })}
-                        >
-                            <SelectTrigger
-                                aria-label="Match all or any condition"
-                                className="h-7 w-[4.5rem] normal-case tracking-normal"
-                            >
-                                <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="and">all</SelectItem>
-                                <SelectItem value="or">any</SelectItem>
-                            </SelectContent>
-                        </Select>
-                        of these
-                    </label>
+                    <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Conditions
+                    </span>
 
                     {filter.conditions.length > 0 && (
                         <button
@@ -460,15 +477,54 @@ function AdvancedFilterPopover({ logs, filter, onChange, onClear }: AdvancedFilt
                     </p>
                 ) : (
                     <div className="flex max-h-[16rem] flex-col gap-2 overflow-y-auto pr-1">
-                        {filter.conditions.map(condition => (
+                        {filter.conditions.map((condition, index) => (
                             <ConditionRow
                                 key={condition.id}
                                 condition={condition}
+                                position={index + 1}
+                                isReferenced={referencedSet === null || referencedSet.has(index + 1)}
                                 logs={logs}
                                 onChange={updateCondition}
                                 onRemove={() => removeCondition(condition.id)}
                             />
                         ))}
+                    </div>
+                )}
+
+                {filter.conditions.length > 1 && (
+                    <div className="mt-3 border-t border-border pt-3">
+                        <label
+                            htmlFor="advanced-filter-logic"
+                            className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-muted-foreground"
+                        >
+                            Filter logic
+                        </label>
+                        <input
+                            id="advanced-filter-logic"
+                            type="text"
+                            spellCheck={false}
+                            autoComplete="off"
+                            value={filter.logic}
+                            placeholder={defaultLogicExpression}
+                            aria-invalid={logicState.status === 'invalid'}
+                            aria-describedby="advanced-filter-logic-hint"
+                            onChange={(event) => onChange({ ...filter, logic: event.target.value })}
+                            className={`
+                                ${INPUT_CLASS_NAME} w-full font-mono
+                                ${logicState.status === 'invalid' ? 'ring-[2px] ring-destructive/60' : ''}
+                            `}
+                        />
+                        <p
+                            id="advanced-filter-logic-hint"
+                            aria-live="polite"
+                            className={`mt-1.5 text-xs ${logicState.status === 'invalid' ? 'text-destructive' : 'text-muted-foreground'}`}
+                        >
+                            {logicState.status === 'invalid'
+                                ? logicState.error
+                                : unreferencedPositions.length > 0
+                                    ? `Condition ${unreferencedPositions.join(', ')} not used by this expression.`
+                                    : 'Combine conditions by number, e.g. 1 AND 2 AND (3 OR 4). Leave blank to match all.'}
+                        </p>
                     </div>
                 )}
 
