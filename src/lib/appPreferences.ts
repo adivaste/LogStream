@@ -6,6 +6,7 @@ import {
     type AdvancedLogFilter,
     type FilterOperator,
     EMPTY_ADVANCED_FILTER,
+    RELATIVE_TIME_UNITS,
     getFilterField,
     getOperatorsForField
 } from "@/lib/logFilterConditions";
@@ -126,12 +127,19 @@ const normalizeAdvancedFilter = (value: unknown): AdvancedLogFilter => {
             return [];
         }
 
+        const values = Array.isArray(rawCondition.values)
+            ? rawCondition.values.filter((entry): entry is string => typeof entry === 'string')
+            : [];
+        const unit = RELATIVE_TIME_UNITS.find(candidate => candidate === rawCondition.unit) ?? 'minutes';
+
         return [{
             id: typeof rawCondition.id === 'string' ? rawCondition.id : `stored-condition-${index}`,
             field,
             operator: operator as FilterOperator,
             value: typeof rawCondition.value === 'string' ? rawCondition.value : '',
-            secondValue: typeof rawCondition.secondValue === 'string' ? rawCondition.secondValue : ''
+            secondValue: typeof rawCondition.secondValue === 'string' ? rawCondition.secondValue : '',
+            values,
+            unit
         }];
     });
 

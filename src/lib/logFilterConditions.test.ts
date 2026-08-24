@@ -35,8 +35,18 @@ const condition = (
     field: string,
     operator: FilterOperator,
     value = '',
-    secondValue = ''
-): FilterCondition => ({ id: 'c1', field, operator, value, secondValue });
+    secondValue = '',
+    extra: Partial<FilterCondition> = {}
+): FilterCondition => ({
+    id: 'c1',
+    field,
+    operator,
+    value,
+    secondValue,
+    values: [],
+    unit: 'minutes',
+    ...extra
+});
 
 const filterOf = (
     conditions: FilterCondition[],
@@ -164,6 +174,84 @@ describe('matchesAdvancedFilter', () => {
     });
 });
 
+describe('multi-value operators', () => {
+    it('matches any of the selected values', () => {
+        const filter = filterOf([
+            condition('status', 'isAnyOf', '', '', { values: ['OperationFailed', 'Unknown'] })
+        ]);
+
+        expect(matchesAdvancedFilter(buildLog({ status: 'OperationFailed' }), filter)).toBe(true);
+        expect(matchesAdvancedFilter(buildLog({ status: 'Unknown' }), filter)).toBe(true);
+        expect(matchesAdvancedFilter(buildLog({ status: 'Success' }), filter)).toBe(false);
+    });
+
+    it('excludes every selected value with is none of', () => {
+        const filter = filterOf([
+            condition('status', 'isNoneOf', '', '', { values: ['Success', 'Unknown'] })
+        ]);
+
+        expect(matchesAdvancedFilter(buildLog({ status: 'Success' }), filter)).toBe(false);
+        expect(matchesAdvancedFilter(buildLog({ status: 'Unknown' }), filter)).toBe(false);
+        expect(matchesAdvancedFilter(buildLog({ status: 'OperationFailed' }), filter)).toBe(true);
+    });
+
+    it('treats an empty selection as inert rather than matching nothing', () => {
+        const emptySelection = condition('status', 'isAnyOf', '', '', { values: [] });
+
+        expect(isConditionComplete(emptySelection)).toBe(false);
+        expect(matchesAdvancedFilter(buildLog({ status: 'Success' }), filterOf([emptySelection]))).toBe(true);
+    });
+
+    it('works on text fields too', () => {
+        const filter = filterOf([
+            condition('user', 'isAnyOf', '', '', { values: ['Ada Lovelace', 'Grace Hopper'] })
+        ]);
+
+        expect(matchesAdvancedFilter(buildLog({ user: 'Grace Hopper' }), filter)).toBe(true);
+        expect(matchesAdvancedFilter(buildLog({ user: 'Someone Else' }), filter)).toBe(false);
+    });
+});
+
+describe('relative time', () => {
+    const now = new Date('2026-08-25T12:00:00.000Z').getTime();
+
+    it('matches logs inside the window and excludes older ones', () => {
+        const filter = filterOf([
+            condition('startTime', 'inLast', '30', '', { unit: 'minutes' })
+        ]);
+        const recent = buildLog({ startTime: '2026-08-25T11:45:00.000Z' });
+        const old = buildLog({ startTime: '2026-08-25T11:00:00.000Z' });
+
+        expect(matchesAdvancedFilter(recent, filter, now)).toBe(true);
+        expect(matchesAdvancedFilter(old, filter, now)).toBe(false);
+    });
+
+    it('honours the unit', () => {
+        const log = buildLog({ startTime: '2026-08-24T18:00:00.000Z' });
+        const inHours = filterOf([condition('startTime', 'inLast', '2', '', { unit: 'hours' })]);
+        const inDays = filterOf([condition('startTime', 'inLast', '2', '', { unit: 'days' })]);
+
+        expect(matchesAdvancedFilter(log, inHours, now)).toBe(false);
+        expect(matchesAdvancedFilter(log, inDays, now)).toBe(true);
+    });
+
+    it('rejects a zero or negative window as incomplete', () => {
+        expect(isConditionComplete(condition('startTime', 'inLast', '0'))).toBe(false);
+        expect(isConditionComplete(condition('startTime', 'inLast', '-5'))).toBe(false);
+        expect(isConditionComplete(condition('startTime', 'inLast', '15'))).toBe(true);
+    });
+
+    it('evaluates every row against one instant', () => {
+        // Injecting `now` is what makes this deterministic - reading the clock
+        // per row could straddle a boundary mid-pass on a large list.
+        const filter = filterOf([condition('startTime', 'inLast', '1', '', { unit: 'minutes' })]);
+        const boundary = buildLog({ startTime: '2026-08-25T11:59:30.000Z' });
+
+        expect(matchesAdvancedFilter(boundary, filter, now)).toBe(true);
+        expect(matchesAdvancedFilter(boundary, filter, now + 60_000)).toBe(false);
+    });
+});
+
 describe('helpers', () => {
     it('counts only the conditions that actually filter', () => {
         const filter = filterOf([
@@ -181,15 +269,19 @@ describe('helpers', () => {
         expect(getOperatorsForField('hasErrors')).toEqual(['isTrue', 'isFalse']);
     });
 
-    it('derives enum options from the loaded logs', () => {
+    it('derives pick-list options from the loaded logs, deduped and sorted', () => {
         const logs = [
-            buildLog({ status: 'Success' }),
-            buildLog({ status: 'OperationFailed' }),
-            buildLog({ status: 'Success' })
+            buildLog({ status: 'Success', user: 'Ada Lovelace' }),
+            buildLog({ status: 'OperationFailed', user: 'Grace Hopper' }),
+            buildLog({ status: 'Success', user: 'Ada Lovelace' })
         ];
 
         expect(getEnumOptions('status', logs)).toEqual(['OperationFailed', 'Success']);
-        expect(getEnumOptions('operation', logs)).toEqual([]);
+        // Text fields expose options too, so "is any of" has a pick-list.
+        expect(getEnumOptions('user', logs)).toEqual(['Ada Lovelace', 'Grace Hopper']);
+        // Non-pick-list types have none.
+        expect(getEnumOptions('durationMs', logs)).toEqual([]);
+        expect(getEnumOptions('hasErrors', logs)).toEqual([]);
     });
 
     it('creates conditions with a valid default operator and unique ids', () => {

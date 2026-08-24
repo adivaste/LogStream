@@ -1,31 +1,30 @@
-import { ListFilter, Plus, X } from "lucide-react";
+import { ChevronDown, ListFilter, Plus, X } from "lucide-react";
 import React from "react";
 
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
     type AdvancedLogFilter,
     type FilterCondition,
     type FilterConjunction,
     type FilterOperator,
+    type RelativeTimeUnit,
     FILTER_FIELDS,
     OPERATOR_LABELS,
+    RELATIVE_TIME_UNITS,
     createFilterCondition,
     getActiveConditionCount,
     getEnumOptions,
     getFilterField,
     getOperatorsForField,
     isConditionComplete,
+    operatorIsRelativeTime,
     operatorNeedsSecondValue,
-    operatorNeedsValue
+    operatorNeedsValue,
+    operatorUsesValueList
 } from "@/lib/logFilterConditions";
 import type { LogEntry } from "@/types/ui";
-
-const SELECT_CLASS_NAME = `
-    h-8 min-w-0 rounded-md border-0 bg-input/80 px-1.5 text-sm text-foreground shadow-xs outline-none
-    transition-[color,box-shadow] focus-visible:ring-[2px] focus-visible:ring-ring/50
-    dark:bg-input/80
-`;
 
 const INPUT_CLASS_NAME = `
     h-8 min-w-0 rounded-md border-0 bg-input/80 px-2 text-sm text-foreground shadow-xs outline-none
@@ -54,13 +53,97 @@ type ConditionRowProps = {
 // something it silently rejects and renders blank.
 const toDateTimeLocalValue = (value: string) => value.slice(0, 16);
 
+type ValueListPickerProps = {
+    selected: string[];
+    options: string[];
+    onChange: (_values: string[]) => void;
+}
+
+// A checkbox list rather than a multi-select: "Status is none of [Success,
+// Unknown]" in one row is the whole point, and a plain select can't express
+// it without one row per value.
+function ValueListPicker({ selected, options, onChange }: ValueListPickerProps) {
+    const [isOpen, setIsOpen] = React.useState(false);
+
+    // Selections stored from a previous session may no longer appear in the
+    // loaded logs; surface them anyway so the filter is never silently
+    // narrower than what the row claims.
+    const visibleOptions = React.useMemo(() => {
+        const missing = selected.filter(value => !options.includes(value));
+
+        return [...options, ...missing];
+    }, [options, selected]);
+
+    const toggleValue = (value: string) => {
+        onChange(selected.includes(value)
+            ? selected.filter(entry => entry !== value)
+            : [...selected, value]);
+    };
+
+    const summary = selected.length === 0
+        ? 'Select values…'
+        : selected.length === 1
+            ? selected[0]
+            : `${selected.length} selected`;
+
+    return (
+        <Popover open={isOpen} onOpenChange={setIsOpen}>
+            <PopoverTrigger
+                aria-label="Filter values"
+                aria-expanded={isOpen}
+                title={selected.length > 0 ? selected.join(', ') : undefined}
+                className="
+                    flex h-8 min-w-0 flex-1 cursor-pointer items-center justify-between gap-1 rounded-md
+                    border-0 bg-input/80 px-2 text-sm text-foreground shadow-xs outline-none
+                    transition-[color,box-shadow] focus-visible:ring-[2px] focus-visible:ring-ring/50
+                    dark:bg-input/80
+                "
+            >
+                <span className={`min-w-0 truncate ${selected.length === 0 ? 'text-muted-foreground' : ''}`}>
+                    {summary}
+                </span>
+                <ChevronDown size={13} className="shrink-0 text-muted-foreground" />
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-56 border border-border bg-popover p-1 font-sans">
+                {visibleOptions.length === 0 ? (
+                    <p className="px-2 py-3 text-center text-xs text-muted-foreground">
+                        No values in the loaded logs yet.
+                    </p>
+                ) : (
+                    <div className="max-h-56 overflow-y-auto">
+                        {visibleOptions.map(option => (
+                            <label
+                                key={option}
+                                className="
+                                    flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm
+                                    text-foreground hover:bg-muted
+                                "
+                            >
+                                <input
+                                    type="checkbox"
+                                    checked={selected.includes(option)}
+                                    onChange={() => toggleValue(option)}
+                                    className="size-3.5 shrink-0 accent-emerald-500"
+                                />
+                                <span className="min-w-0 truncate">{option}</span>
+                            </label>
+                        ))}
+                    </div>
+                )}
+            </PopoverContent>
+        </Popover>
+    );
+}
+
 function ConditionRow({ condition, logs, onChange, onRemove }: ConditionRowProps) {
     const field = getFilterField(condition.field);
     const operators = getOperatorsForField(condition.field);
-    const enumOptions = React.useMemo(
+    const pickerOptions = React.useMemo(
         () => getEnumOptions(condition.field, logs),
         [condition.field, logs]
     );
+    const usesValueList = operatorUsesValueList(condition.operator);
+    const isRelativeTime = operatorIsRelativeTime(condition.operator);
 
     const handleFieldChange = (nextFieldId: string) => {
         const nextOperators = getOperatorsForField(nextFieldId);
@@ -76,7 +159,8 @@ function ConditionRow({ condition, logs, onChange, onRemove }: ConditionRowProps
             field: nextFieldId,
             operator: nextOperator,
             value: '',
-            secondValue: ''
+            secondValue: '',
+            values: []
         });
     };
 
@@ -86,62 +170,107 @@ function ConditionRow({ condition, logs, onChange, onRemove }: ConditionRowProps
 
     return (
         <div className="flex items-center gap-1.5">
-            <select
-                aria-label="Filter field"
-                value={condition.field}
-                onChange={(event) => handleFieldChange(event.target.value)}
-                className={`${SELECT_CLASS_NAME} w-[7.5rem] shrink-0`}
-            >
-                {FILTER_FIELDS.map(option => (
-                    <option key={option.id} value={option.id}>{option.label}</option>
-                ))}
-            </select>
+            <Select value={condition.field} onValueChange={handleFieldChange}>
+                <SelectTrigger aria-label="Filter field" className="w-[7.5rem] shrink-0">
+                    <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                    {FILTER_FIELDS.map(option => (
+                        <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>
+                    ))}
+                </SelectContent>
+            </Select>
 
-            <select
-                aria-label="Filter operator"
+            <Select
                 value={condition.operator}
-                onChange={(event) => onChange({
+                onValueChange={(nextOperator) => onChange({
                     ...condition,
-                    operator: event.target.value as FilterOperator,
-                    // Dropping the second value when leaving `between` keeps a
-                    // stale bound from reappearing if the user switches back.
-                    secondValue: operatorNeedsSecondValue(event.target.value as FilterOperator)
+                    operator: nextOperator as FilterOperator,
+                    // Each operator owns a different value slot, so anything
+                    // belonging to the previous one is dropped rather than left
+                    // to reappear if the user switches back.
+                    secondValue: operatorNeedsSecondValue(nextOperator as FilterOperator)
                         ? condition.secondValue
-                        : ''
+                        : '',
+                    values: operatorUsesValueList(nextOperator as FilterOperator)
+                        ? condition.values
+                        : []
                 })}
-                className={`${SELECT_CLASS_NAME} w-[8.5rem] shrink-0`}
             >
-                {operators.map(operator => (
-                    <option key={operator} value={operator}>{OPERATOR_LABELS[operator]}</option>
-                ))}
-            </select>
+                <SelectTrigger aria-label="Filter operator" className="w-[8.5rem] shrink-0">
+                    <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                    {operators.map(operator => (
+                        <SelectItem key={operator} value={operator}>{OPERATOR_LABELS[operator]}</SelectItem>
+                    ))}
+                </SelectContent>
+            </Select>
 
             <div className="flex min-w-0 flex-1 items-center gap-1.5">
                 {!showValue && (
                     <span className="text-xs text-muted-foreground">no value needed</span>
                 )}
 
-                {showValue && field?.type === 'enum' && (
-                    <select
-                        aria-label="Filter value"
-                        value={condition.value}
-                        onChange={(event) => onChange({ ...condition, value: event.target.value })}
-                        className={`${SELECT_CLASS_NAME} min-w-0 flex-1`}
-                    >
-                        <option value="">Select…</option>
-                        {enumOptions.map(option => (
-                            <option key={option} value={option}>{option}</option>
-                        ))}
-                        {/* A value stored from a previous session may no longer
-                            be present in the loaded logs; keep it selectable so
-                            the filter doesn't silently retarget itself. */}
-                        {condition.value !== '' && !enumOptions.includes(condition.value) && (
-                            <option value={condition.value}>{condition.value}</option>
-                        )}
-                    </select>
+                {showValue && usesValueList && (
+                    <ValueListPicker
+                        selected={condition.values}
+                        options={pickerOptions}
+                        onChange={(values) => onChange({ ...condition, values })}
+                    />
                 )}
 
-                {showValue && field?.type === 'date' && (
+                {showValue && isRelativeTime && (
+                    <>
+                        <input
+                            type="number"
+                            inputMode="numeric"
+                            min={1}
+                            aria-label="Relative time amount"
+                            placeholder="15"
+                            value={condition.value}
+                            onChange={(event) => onChange({ ...condition, value: event.target.value })}
+                            className={`${INPUT_CLASS_NAME} w-16 shrink-0`}
+                        />
+                        <Select
+                            value={condition.unit}
+                            onValueChange={(unit) => onChange({ ...condition, unit: unit as RelativeTimeUnit })}
+                        >
+                            <SelectTrigger aria-label="Relative time unit" className="w-[6.5rem] shrink-0">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {RELATIVE_TIME_UNITS.map(unit => (
+                                    <SelectItem key={unit} value={unit}>{unit}</SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </>
+                )}
+
+                {showValue && !usesValueList && field?.type === 'enum' && (
+                    <Select
+                        value={condition.value}
+                        onValueChange={(value) => onChange({ ...condition, value })}
+                    >
+                        <SelectTrigger aria-label="Filter value" className="min-w-0 flex-1">
+                            <SelectValue placeholder="Select…" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {pickerOptions.map(option => (
+                                <SelectItem key={option} value={option}>{option}</SelectItem>
+                            ))}
+                            {/* A value stored from a previous session may no longer
+                                be present in the loaded logs; keep it selectable so
+                                the filter doesn't silently retarget itself. */}
+                            {condition.value !== '' && !pickerOptions.includes(condition.value) && (
+                                <SelectItem value={condition.value}>{condition.value}</SelectItem>
+                            )}
+                        </SelectContent>
+                    </Select>
+                )}
+
+                {showValue && !isRelativeTime && field?.type === 'date' && (
                     <>
                         <input
                             type="datetime-local"
@@ -162,7 +291,7 @@ function ConditionRow({ condition, logs, onChange, onRemove }: ConditionRowProps
                     </>
                 )}
 
-                {showValue && field?.type === 'number' && (
+                {showValue && !usesValueList && field?.type === 'number' && (
                     <>
                         <input
                             type="number"
@@ -193,7 +322,7 @@ function ConditionRow({ condition, logs, onChange, onRemove }: ConditionRowProps
                     </>
                 )}
 
-                {showValue && field?.type === 'text' && (
+                {showValue && !usesValueList && field?.type === 'text' && (
                     <input
                         type="text"
                         aria-label="Filter value"
@@ -289,18 +418,24 @@ function AdvancedFilterPopover({ logs, filter, onChange, onClear }: AdvancedFilt
                 <div className="mb-3 flex items-center justify-between gap-2">
                     <label className="inline-flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                         Match
-                        <select
-                            aria-label="Match all or any condition"
+                        <Select
                             value={filter.conjunction}
-                            onChange={(event) => onChange({
+                            onValueChange={(conjunction) => onChange({
                                 ...filter,
-                                conjunction: event.target.value as FilterConjunction
+                                conjunction: conjunction as FilterConjunction
                             })}
-                            className={`${SELECT_CLASS_NAME} h-7 w-[4.5rem] normal-case tracking-normal`}
                         >
-                            <option value="and">all</option>
-                            <option value="or">any</option>
-                        </select>
+                            <SelectTrigger
+                                aria-label="Match all or any condition"
+                                className="h-7 w-[4.5rem] normal-case tracking-normal"
+                            >
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="and">all</SelectItem>
+                                <SelectItem value="or">any</SelectItem>
+                            </SelectContent>
+                        </Select>
                         of these
                     </label>
 

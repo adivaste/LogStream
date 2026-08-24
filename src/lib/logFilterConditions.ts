@@ -13,6 +13,8 @@ export type FilterOperator =
     | 'notEquals'
     | 'startsWith'
     | 'endsWith'
+    | 'isAnyOf'
+    | 'isNoneOf'
     | 'isEmpty'
     | 'isNotEmpty'
     | 'greaterThan'
@@ -22,8 +24,19 @@ export type FilterOperator =
     | 'between'
     | 'before'
     | 'after'
+    | 'inLast'
     | 'isTrue'
     | 'isFalse';
+
+export type RelativeTimeUnit = 'minutes' | 'hours' | 'days';
+
+export const RELATIVE_TIME_UNITS: RelativeTimeUnit[] = ['minutes', 'hours', 'days'];
+
+const RELATIVE_UNIT_MS: Record<RelativeTimeUnit, number> = {
+    minutes: 60_000,
+    hours: 3_600_000,
+    days: 86_400_000
+};
 
 export type FilterConjunction = 'and' | 'or';
 
@@ -36,6 +49,14 @@ export type FilterCondition = {
     // Only used by `between`; kept as a separate slot rather than encoding
     // two numbers into `value`, which would make partial input unparseable.
     secondValue: string;
+    // Only used by `isAnyOf`/`isNoneOf`. A separate slot rather than a
+    // delimited string in `value`, because log values legitimately contain
+    // commas and spaces.
+    values: string[];
+    // Only used by `inLast`. An explicit field rather than overloading
+    // `secondValue` - two operators quietly sharing one slot with different
+    // meanings is exactly the kind of thing that breaks on the next edit.
+    unit: RelativeTimeUnit;
 }
 
 export type AdvancedLogFilter = {
@@ -61,10 +82,13 @@ type FilterFieldDefinition = {
 }
 
 const OPERATORS_BY_TYPE: Record<FilterFieldType, FilterOperator[]> = {
-    text: ['contains', 'notContains', 'equals', 'notEquals', 'startsWith', 'endsWith', 'isEmpty', 'isNotEmpty'],
-    enum: ['equals', 'notEquals', 'isEmpty', 'isNotEmpty'],
+    text: [
+        'contains', 'notContains', 'equals', 'notEquals', 'startsWith', 'endsWith',
+        'isAnyOf', 'isNoneOf', 'isEmpty', 'isNotEmpty'
+    ],
+    enum: ['isAnyOf', 'isNoneOf', 'equals', 'notEquals', 'isEmpty', 'isNotEmpty'],
     number: ['equals', 'greaterThan', 'greaterOrEqual', 'lessThan', 'lessOrEqual', 'between'],
-    date: ['after', 'before', 'between'],
+    date: ['inLast', 'after', 'before', 'between'],
     boolean: ['isTrue', 'isFalse']
 };
 
@@ -75,6 +99,8 @@ export const OPERATOR_LABELS: Record<FilterOperator, string> = {
     notEquals: 'is not',
     startsWith: 'starts with',
     endsWith: 'ends with',
+    isAnyOf: 'is any of',
+    isNoneOf: 'is none of',
     isEmpty: 'is empty',
     isNotEmpty: 'is not empty',
     greaterThan: 'greater than',
@@ -84,6 +110,7 @@ export const OPERATOR_LABELS: Record<FilterOperator, string> = {
     between: 'between',
     before: 'before',
     after: 'after',
+    inLast: 'within last',
     isTrue: 'is yes',
     isFalse: 'is no'
 };
@@ -93,6 +120,8 @@ export const OPERATOR_LABELS: Record<FilterOperator, string> = {
 const VALUELESS_OPERATORS: ReadonlySet<FilterOperator> = new Set([
     'isEmpty', 'isNotEmpty', 'isTrue', 'isFalse'
 ]);
+
+const MULTI_VALUE_OPERATORS: ReadonlySet<FilterOperator> = new Set(['isAnyOf', 'isNoneOf']);
 
 const BYTES_PER_KB = 1024;
 
@@ -152,6 +181,8 @@ export const getOperatorsForField = (fieldId: string): FilterOperator[] => {
 
 export const operatorNeedsValue = (operator: FilterOperator) => !VALUELESS_OPERATORS.has(operator);
 export const operatorNeedsSecondValue = (operator: FilterOperator) => operator === 'between';
+export const operatorUsesValueList = (operator: FilterOperator) => MULTI_VALUE_OPERATORS.has(operator);
+export const operatorIsRelativeTime = (operator: FilterOperator) => operator === 'inLast';
 
 // A half-typed condition must not filter anything out - otherwise the list
 // blanks the moment you pick a field and before you type a value, which
@@ -169,6 +200,19 @@ export const isConditionComplete = (condition: FilterCondition) => {
 
     if (!operatorNeedsValue(condition.operator)) {
         return true;
+    }
+
+    if (operatorUsesValueList(condition.operator)) {
+        // An empty selection is inert, same as an empty text box - it must not
+        // mean "matches nothing" (which would blank the list) or "matches
+        // everything" (which would make the row pointless).
+        return condition.values.length > 0;
+    }
+
+    if (operatorIsRelativeTime(condition.operator)) {
+        const amount = Number(condition.value);
+
+        return condition.value.trim() !== '' && !Number.isNaN(amount) && amount > 0;
     }
 
     if (condition.value.trim() === '') {
@@ -223,6 +267,12 @@ const evaluateText = (actual: string, condition: FilterCondition) => {
     const haystack = actual.toLowerCase();
     const needle = condition.value.trim().toLowerCase();
 
+    if (operatorUsesValueList(condition.operator)) {
+        const isListed = condition.values.some(listed => listed.toLowerCase() === haystack);
+
+        return condition.operator === 'isAnyOf' ? isListed : !isListed;
+    }
+
     switch (condition.operator) {
         case 'contains': return haystack.includes(needle);
         case 'notContains': return !haystack.includes(needle);
@@ -276,7 +326,7 @@ const evaluateNumber = (
     }
 }
 
-const evaluateDate = (actual: string | null, condition: FilterCondition) => {
+const evaluateDate = (actual: string | null, condition: FilterCondition, nowMs: number) => {
     if (actual === null) {
         return false;
     }
@@ -285,6 +335,16 @@ const evaluateDate = (actual: string | null, condition: FilterCondition) => {
 
     if (actualMs === null) {
         return false;
+    }
+
+    if (condition.operator === 'inLast') {
+        const amount = Number(condition.value);
+
+        if (condition.value.trim() === '' || Number.isNaN(amount) || amount <= 0) {
+            return true;
+        }
+
+        return actualMs >= nowMs - amount * RELATIVE_UNIT_MS[condition.unit];
     }
 
     const targetMs = toComparableTime(condition.value);
@@ -314,7 +374,15 @@ const evaluateBoolean = (actual: boolean, condition: FilterCondition) => {
     return condition.operator === 'isTrue' ? actual : !actual;
 }
 
-export const evaluateCondition = (log: LogEntry, condition: FilterCondition) => {
+// `nowMs` is injected rather than read from Date.now() inside, so relative
+// time ("within last 15 minutes") is testable and so a whole filter pass
+// evaluates against one consistent instant instead of a clock that moves
+// between rows.
+export const evaluateCondition = (
+    log: LogEntry,
+    condition: FilterCondition,
+    nowMs: number = Date.now()
+) => {
     const field = getFilterField(condition.field);
 
     if (!field) {
@@ -329,13 +397,17 @@ export const evaluateCondition = (log: LogEntry, condition: FilterCondition) => 
         case 'number':
             return evaluateNumber(typeof actual === 'number' ? actual : null, condition, field);
         case 'date':
-            return evaluateDate(typeof actual === 'string' ? actual : null, condition);
+            return evaluateDate(typeof actual === 'string' ? actual : null, condition, nowMs);
         default:
             return evaluateText(actual === null ? '' : String(actual), condition);
     }
 }
 
-export const matchesAdvancedFilter = (log: LogEntry, filter: AdvancedLogFilter) => {
+export const matchesAdvancedFilter = (
+    log: LogEntry,
+    filter: AdvancedLogFilter,
+    nowMs: number = Date.now()
+) => {
     const activeConditions = getActiveConditions(filter);
 
     if (activeConditions.length === 0) {
@@ -343,8 +415,8 @@ export const matchesAdvancedFilter = (log: LogEntry, filter: AdvancedLogFilter) 
     }
 
     return filter.conjunction === 'and'
-        ? activeConditions.every(condition => evaluateCondition(log, condition))
-        : activeConditions.some(condition => evaluateCondition(log, condition));
+        ? activeConditions.every(condition => evaluateCondition(log, condition, nowMs))
+        : activeConditions.some(condition => evaluateCondition(log, condition, nowMs));
 }
 
 // Distinct values actually present in the loaded logs, for enum fields. Built
@@ -354,7 +426,9 @@ export const matchesAdvancedFilter = (log: LogEntry, filter: AdvancedLogFilter) 
 export const getEnumOptions = (fieldId: string, logs: LogEntry[]) => {
     const field = getFilterField(fieldId);
 
-    if (!field || field.type !== 'enum') {
+    // Text fields are included too: "is any of" needs a pick-list, and the
+    // distinct users/applications actually present are exactly that list.
+    if (!field || (field.type !== 'enum' && field.type !== 'text')) {
         return [];
     }
 
@@ -381,6 +455,8 @@ export const createFilterCondition = (fieldId = FILTER_FIELDS[0]?.id ?? 'operati
         field: fieldId,
         operator: getOperatorsForField(fieldId)[0] ?? 'contains',
         value: '',
-        secondValue: ''
+        secondValue: '',
+        values: [],
+        unit: 'minutes'
     };
 }
