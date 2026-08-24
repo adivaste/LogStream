@@ -234,6 +234,7 @@ function LogList({
     const endTime = useTableUIStore(state => state.endTime);
     const minSizeBytes = useTableUIStore(state => state.minSizeBytes);
     const maxSizeBytes = useTableUIStore(state => state.maxSizeBytes);
+    const advancedFilter = useTableUIStore(state => state.advancedFilter);
     const isLogPanelOpen = useTableUIStore(state => state.isLogPanelOpen);
 
     // Store actions
@@ -255,9 +256,19 @@ function LogList({
             startTime,
             endTime,
             minSizeBytes,
-            maxSizeBytes
+            maxSizeBytes,
+            advancedFilter
         });
-    }, [deferredSearchQuery, endTime, logs, maxSizeBytes, minSizeBytes, selectedUser, startTime]);
+    }, [
+        advancedFilter,
+        deferredSearchQuery,
+        endTime,
+        logs,
+        maxSizeBytes,
+        minSizeBytes,
+        selectedUser,
+        startTime
+    ]);
 
     const sortedLogs = React.useMemo(() => {
         return sortLogs(filteredLogs, sortBy, sortDirection);

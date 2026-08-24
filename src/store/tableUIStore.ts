@@ -1,8 +1,10 @@
 import { create } from "zustand";
 import {
+    persistAdvancedLogFilter,
     persistLogTableSortingPreference,
     readAppPreferences
 } from "@/lib/appPreferences";
+import { type AdvancedLogFilter, EMPTY_ADVANCED_FILTER } from "@/lib/logFilterConditions";
 import { sendWorkerRequest } from "@/services/backgroundBridge";
 import { useUIStore } from "@/store/uiStore";
 import {
@@ -63,6 +65,11 @@ type TableUIState = {
     // are (LogBodyViewer unmounts on panel close). Node ids are source line
     // indexes, so this mirrors pinnedLinesByLogId's shape exactly.
     collapsedCallTreeNodesByLogId: Record<string, number[]>;
+    // Persisted (unlike the quick filters), so it survives a reload. That
+    // makes an always-visible active indicator on the toolbar button
+    // non-optional - a filter you can't see is a filter you'll blame the
+    // extension for.
+    advancedFilter: AdvancedLogFilter;
 }
 type TableUIActions = {
     setSorting(_sortBy: SortBy, _sortDirection: SortDirection): void;
@@ -81,6 +88,8 @@ type TableUIActions = {
     setLogBodyViewMode(_mode: LogBodyViewMode): void;
     toggleCallTreeNode(_logId: string, _nodeId: number): void;
     setCallTreeCollapsedNodes(_logId: string, _nodeIds: number[]): void;
+    setAdvancedFilter(_filter: AdvancedLogFilter): void;
+    clearAdvancedFilter(): void;
 }
 type TableUIStore = TableUIState & TableUIActions;
 
@@ -124,6 +133,7 @@ export const useTableUIStore = create<TableUIStore>((set, get) => ({
     pinnedLinesByLogId: {},
     logBodyViewMode: 'raw',
     collapsedCallTreeNodesByLogId: {},
+    advancedFilter: preferences.logFilter.advanced,
 
     // Actions
     setSorting: (sortBy: SortBy, sortDirection: SortDirection) => {
@@ -134,14 +144,20 @@ export const useTableUIStore = create<TableUIStore>((set, get) => ({
     setSelectedUser: (selectedUser: string | null) => set({ selectedUser }),
     setTimeRange: (startTime: Date, endTime: Date) => set({ startTime, endTime }),
     setSizeRange: (minSizeBytes: number | null, maxSizeBytes: number | null) => set({ minSizeBytes, maxSizeBytes }),
-    clearFilters: () => set({
-        searchQuery: DEFAULT_SEARCH_QUERY,
-        selectedUser: null,
-        startTime: createDefaultFilterStartTime(),
-        endTime: createDefaultFilterEndTime(),
-        minSizeBytes: null,
-        maxSizeBytes: null
-    }),
+    clearFilters: () => {
+        // The advanced filter is persisted, so leaving it active after an
+        // explicit "clear filters" would look like the button did nothing.
+        persistAdvancedLogFilter(EMPTY_ADVANCED_FILTER);
+        set({
+            searchQuery: DEFAULT_SEARCH_QUERY,
+            selectedUser: null,
+            startTime: createDefaultFilterStartTime(),
+            endTime: createDefaultFilterEndTime(),
+            minSizeBytes: null,
+            maxSizeBytes: null,
+            advancedFilter: EMPTY_ADVANCED_FILTER
+        });
+    },
     // Reads through zustand's own `get` rather than useTableUIStore.getState().
     // Referencing the exported store from inside its own initializer made the
     // whole store infer as `any`, which silently spread to every `state =>`
@@ -243,6 +259,14 @@ export const useTableUIStore = create<TableUIStore>((set, get) => ({
             ...state.collapsedCallTreeNodesByLogId,
             [logId]: nodeIds
         }
-    }))
+    })),
+    setAdvancedFilter: (filter: AdvancedLogFilter) => {
+        persistAdvancedLogFilter(filter);
+        set({ advancedFilter: filter });
+    },
+    clearAdvancedFilter: () => {
+        persistAdvancedLogFilter(EMPTY_ADVANCED_FILTER);
+        set({ advancedFilter: EMPTY_ADVANCED_FILTER });
+    }
 
 }));

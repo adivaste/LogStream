@@ -90,7 +90,11 @@ export const mapSalesforceLogToUiLog = (log: SalesforceLogEntry): LogEntry => {
         duration: log.durationMs === null ? '-' : `${log.durationMs}ms`,
         timestamp: formatTimestamp(log.startTime),
         startTime: log.startTime,
-        readAt: log.readAt
+        readAt: log.readAt,
+        byteLength: log.byteLength,
+        durationMs: log.durationMs,
+        status: log.status,
+        hasErrors: log.hasErrors
     };
 }
 

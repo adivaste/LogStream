@@ -2,6 +2,13 @@ import {
     DEFAULT_LIVE_LOG_IDLE_TIMEOUT_MS,
     DEFAULT_LIVE_LOG_POLL_INTERVAL_MS
 } from "@/lib/livePollingConfig";
+import {
+    type AdvancedLogFilter,
+    type FilterOperator,
+    EMPTY_ADVANCED_FILTER,
+    getFilterField,
+    getOperatorsForField
+} from "@/lib/logFilterConditions";
 import { DEFAULT_SLOW_LOG_THRESHOLD_MS } from "@/lib/logListConfig";
 import { DEFAULT_TRACE_FLAG_DURATION_MS } from "@/lib/traceFlagConfig";
 import type { SalesforceConnectionInfo, SalesforceOrgId } from "@/types/salesforce";
@@ -46,6 +53,9 @@ export type AppPreferences = {
         viewFilter: 'all' | 'debug' | 'executable';
         fontSizePx: number;
     };
+    logFilter: {
+        advanced: AdvancedLogFilter;
+    };
     connection: {
         lastConnectedOrg: StoredOrgPreference | null;
         recentOrgs: StoredOrgPreference[];
@@ -75,6 +85,9 @@ export const DEFAULT_APP_PREFERENCES: AppPreferences = {
         viewFilter: 'all',
         fontSizePx: DEFAULT_LOG_BODY_FONT_SIZE_PX
     },
+    logFilter: {
+        advanced: EMPTY_ADVANCED_FILTER
+    },
     connection: {
         lastConnectedOrg: null,
         recentOrgs: []
@@ -83,6 +96,46 @@ export const DEFAULT_APP_PREFERENCES: AppPreferences = {
 
 const isObject = (value: unknown): value is Record<string, unknown> => {
     return typeof value === 'object' && value !== null;
+}
+
+// Stored filters come back from localStorage as untyped JSON, and a malformed
+// one must never silently hide logs. Anything that doesn't validate against
+// the current field/operator registry is dropped rather than kept, so a
+// filter written by an older build (or hand-edited) degrades to "no filter"
+// instead of an unexplained empty log list.
+const normalizeAdvancedFilter = (value: unknown): AdvancedLogFilter => {
+    if (!isObject(value)) {
+        return EMPTY_ADVANCED_FILTER;
+    }
+
+    const conjunction = value.conjunction === 'or' ? 'or' : 'and';
+    const rawConditions = Array.isArray(value.conditions) ? value.conditions : [];
+    const conditions = rawConditions.flatMap((rawCondition, index) => {
+        if (!isObject(rawCondition)) {
+            return [];
+        }
+
+        const field = typeof rawCondition.field === 'string' ? rawCondition.field : '';
+        const operator = typeof rawCondition.operator === 'string' ? rawCondition.operator : '';
+
+        if (!getFilterField(field)) {
+            return [];
+        }
+
+        if (!getOperatorsForField(field).some(allowed => allowed === operator)) {
+            return [];
+        }
+
+        return [{
+            id: typeof rawCondition.id === 'string' ? rawCondition.id : `stored-condition-${index}`,
+            field,
+            operator: operator as FilterOperator,
+            value: typeof rawCondition.value === 'string' ? rawCondition.value : '',
+            secondValue: typeof rawCondition.secondValue === 'string' ? rawCondition.secondValue : ''
+        }];
+    });
+
+    return { conjunction, conditions };
 }
 
 const isTheme = (value: unknown): value is Theme => {
@@ -171,6 +224,7 @@ const normalizePreferences = (value: unknown): AppPreferences => {
     const polling = isObject(value.polling) ? value.polling : {};
     const logTable = isObject(value.logTable) ? value.logTable : {};
     const logBody = isObject(value.logBody) ? value.logBody : {};
+    const logFilter = isObject(value.logFilter) ? value.logFilter : {};
     const connection = isObject(value.connection) ? value.connection : {};
     const recentOrgs = Array.isArray(connection.recentOrgs)
         ? connection.recentOrgs
@@ -222,6 +276,9 @@ const normalizePreferences = (value: unknown): AppPreferences => {
             fontSizePx: isFontSizeInRange(logBody.fontSizePx)
                 ? logBody.fontSizePx
                 : DEFAULT_APP_PREFERENCES.logBody.fontSizePx
+        },
+        logFilter: {
+            advanced: normalizeAdvancedFilter(logFilter.advanced)
         },
         connection: {
             lastConnectedOrg: normalizeOrgPreference(connection.lastConnectedOrg),
@@ -380,6 +437,16 @@ export const persistLogBodyPreferences = (
         logBody: {
             ...preferences.logBody,
             ...logBody
+        }
+    }));
+}
+
+export const persistAdvancedLogFilter = (advanced: AdvancedLogFilter) => {
+    updateAppPreferences(preferences => ({
+        ...preferences,
+        logFilter: {
+            ...preferences.logFilter,
+            advanced
         }
     }));
 }

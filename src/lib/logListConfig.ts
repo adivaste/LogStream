@@ -1,3 +1,4 @@
+import { type AdvancedLogFilter, matchesAdvancedFilter } from "@/lib/logFilterConditions";
 import { type LogEntry, SortBy, SortDirection } from "@/types/ui";
 
 export const LOG_ROW_HEIGHT = 37;
@@ -72,6 +73,9 @@ type LogFilterOptions = {
     endTime: Date;
     minSizeBytes: number | null;
     maxSizeBytes: number | null;
+    // AND-combined with the quick filters above rather than replacing them,
+    // so the search box and time range keep working while it's active.
+    advancedFilter: AdvancedLogFilter;
 }
 
 // `log.timestamp` is a locale-formatted local time string with no date/timezone
@@ -168,7 +172,8 @@ export const filterLogs = (
         startTime,
         endTime,
         minSizeBytes,
-        maxSizeBytes
+        maxSizeBytes,
+        advancedFilter
     }: LogFilterOptions
 ) => {
     return logs.filter(log => {
@@ -181,6 +186,10 @@ export const filterLogs = (
         }
 
         if (!isWithinSizeRange(log, minSizeBytes, maxSizeBytes)) {
+            return false;
+        }
+
+        if (!matchesAdvancedFilter(log, advancedFilter)) {
             return false;
         }
 

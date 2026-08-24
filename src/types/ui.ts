@@ -32,4 +32,13 @@ export type LogEntry = {
     timestamp: string;
     startTime?: string;
     readAt: string | null;
+    // Raw values carried alongside the formatted ones above. `size` and
+    // `duration` are display strings ("1.2MB", "450ms"), which can only be
+    // matched as text - real >/</between comparisons need the numbers, and
+    // status/hasErrors were being dropped by the mapper entirely even though
+    // "hide the successful ones" is the most common thing to filter on.
+    byteLength: number;
+    durationMs: number | null;
+    status: string;
+    hasErrors: boolean;
 }

@@ -36,16 +36,24 @@ const createMockLog = (index: number): LogEntry => {
     const sizeValue = 1 + ((index * 13) % 980);
     const secondsFromStart = (18 * 60 * 60) + (index * 7);
 
+    const byteLength = sizeValue > 700
+        ? Math.round((sizeValue / 100) * 1024 * 1024)
+        : Math.round(sizeValue * 1024);
+
     return {
         id: `log-${String(logNumber).padStart(5, '0')}`,
         operationType: index % 4 === 0 ? 'U' : 'R',
-        operation,
+        operation: operation ?? 'UnknownOperation',
         user: index % 7 === 0 ? 'Jane Smith' : 'Aditya Vaste',
         app: index % 5 === 0 ? 'Salesforce' : 'Browser',
         size: sizeValue > 700 ? `${(sizeValue / 100).toFixed(1)}MB` : `${sizeValue}.4KB`,
         duration: `${duration}ms`,
         timestamp: formatTimestamp(secondsFromStart),
-        readAt: index % 3 === 0 ? null : formatTimestamp(secondsFromStart + 30)
+        readAt: index % 3 === 0 ? null : formatTimestamp(secondsFromStart + 30),
+        byteLength,
+        durationMs: duration,
+        status: index % 11 === 0 ? 'OperationFailed' : 'Success',
+        hasErrors: index % 11 === 0
     };
 }
 

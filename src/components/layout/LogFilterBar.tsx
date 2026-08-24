@@ -1,5 +1,6 @@
 import React from "react";
 import { Search } from "lucide-react";
+import { AdvancedFilterPopover } from "@/components/layout/AdvancedFilterPopover";
 import { Button } from "@/components/ui/button"
 import {
     Combobox,
@@ -61,6 +62,9 @@ function LogFilterBar({
     const setTimeRange = useTableUIStore(state => state.setTimeRange);
     const setSizeRange = useTableUIStore(state => state.setSizeRange);
     const setSearchQuery = useTableUIStore(state => state.setSearchQuery);
+    const advancedFilter = useTableUIStore(state => state.advancedFilter);
+    const setAdvancedFilter = useTableUIStore(state => state.setAdvancedFilter);
+    const clearAdvancedFilter = useTableUIStore(state => state.clearAdvancedFilter);
     const clearFilters = useTableUIStore(state => state.clearFilters);
     const isDefaultFilterRange = useTableUIStore(state => state.isDefaultFilterRange);
 
@@ -413,6 +417,14 @@ function LogFilterBar({
                     </ComboboxList>
                 </ComboboxContent>
             </Combobox>
+
+            {/* Advanced Filter */}
+            <AdvancedFilterPopover
+                logs={logs}
+                filter={advancedFilter}
+                onChange={setAdvancedFilter}
+                onClear={clearAdvancedFilter}
+            />
 
             {/* Clear Filters */}
             <Button
