@@ -45,6 +45,7 @@ import {
 } from "@/lib/logBodyHighlight";
 import { getErrorLineNumbers, parseLimitUsage } from "@/lib/logBodyMeta";
 import { getNextLogIndex } from "@/lib/logListConfig";
+import { isEditableTarget } from "@/lib/utils";
 import { useTableUIStore } from "@/store/tableUIStore";
 import { useUIStore } from "@/store/uiStore";
 
@@ -70,6 +71,7 @@ type LogBodyViewerProps = {
     // True when the panel was opened with Enter, i.e. the user meant to read
     // this log rather than glance at it.
     shouldFocusOnOpen: boolean;
+    onReturnFocusToList: () => void;
     // Source line indexes (0-based, stable across wrap toggling and view
     // filtering - never the virtualizer's own row index, which shifts
     // whenever the debug/executable filter changes which rows exist at all).
@@ -96,6 +98,7 @@ function LogBodyViewer({
     fileName,
     logId,
     shouldFocusOnOpen,
+    onReturnFocusToList,
     pinnedLines,
     onTogglePinnedLine,
     onClearPinnedLines,
@@ -920,8 +923,26 @@ function LogBodyViewer({
         focusLineAtVisibleIndex(0);
     }, [focusLineAtVisibleIndex, lines.length, logId, shouldFocusOnOpen, visibleLineCount]);
 
+    // Backspace steps back out to the list without closing the panel, so the
+    // log stays open while you carry on scanning - Escape is the one that
+    // dismisses. Handled on the section so it works from raw lines, tree
+    // rows and toolbar buttons alike, and guarded so it still deletes
+    // characters inside the search and go-to-line inputs.
+    const handleSectionKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLElement>) => {
+        if (event.key !== 'Backspace' || isEditableTarget(event.target)) {
+            return;
+        }
+
+        event.preventDefault();
+        onReturnFocusToList();
+    }, [onReturnFocusToList]);
+
     return (
-        <section ref={sectionRef} className="relative flex min-h-0 flex-1 flex-col border-t border-border">
+        <section
+            ref={sectionRef}
+            onKeyDown={handleSectionKeyDown}
+            className="relative flex min-h-0 flex-1 flex-col border-t border-border"
+        >
             <div className="flex items-center gap-2 border-b border-border px-4 py-2">
                 {/* Leftmost, and the only control here besides "More" with a
                     text label - this one answers "what am I looking at", so it

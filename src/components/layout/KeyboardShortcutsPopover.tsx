@@ -35,6 +35,7 @@ const LOG_BODY_SHORTCUTS: ShortcutItem[] = [
     { keys: ['Enter'], label: 'Pin line / open frame in raw log' },
     { keys: ['↑', '↓'], label: 'Move between lines or frames' },
     { keys: ['←', '→'], label: 'Collapse / expand frame' },
+    { keys: ['Backspace'], label: 'Back to list, keep log open' },
     { keys: ['Ctrl', 'C'], label: 'Copy focused line' },
     { keys: ['Ctrl', '⇧', 'C'], label: 'Copy pinned lines' },
     { keys: ['Ctrl', '+'], label: 'Zoom in' },

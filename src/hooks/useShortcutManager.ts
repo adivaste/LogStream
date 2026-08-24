@@ -1,5 +1,6 @@
 import React from "react";
 
+import { isEditableTarget } from "@/lib/utils";
 import { SortBy, SortDirection } from "@/types/ui";
 import { useTableUIStore } from "@/store/tableUIStore";
 import { useUIStore } from "@/store/uiStore";
@@ -15,21 +16,6 @@ const SORT_BY_SHORTCUT: Record<string, SortBy> = {
     d: SortBy.DURATION,
     t: SortBy.TIMESTAMP
 };
-
-const isEditableTarget = (target: EventTarget | null) => {
-    if (!(target instanceof HTMLElement)) {
-        return false;
-    }
-
-    const tagName = target.tagName.toLowerCase();
-
-    return (
-        target.isContentEditable ||
-        tagName === 'input' ||
-        tagName === 'textarea' ||
-        tagName === 'select'
-    );
-}
 
 const getNextSortDirection = (sortBy: SortBy) => {
     const { sortBy: currentSortBy, sortDirection } = useTableUIStore.getState();

@@ -5,6 +5,24 @@ export function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs))
 }
 
+// Guards every bare-key shortcut in the app: a key that means "navigate"
+// somewhere else has to mean "type a character" inside a field, or shortcuts
+// start eating text input.
+export function isEditableTarget(target: EventTarget | null) {
+    if (!(target instanceof HTMLElement)) {
+        return false;
+    }
+
+    const tagName = target.tagName.toLowerCase();
+
+    return (
+        target.isContentEditable ||
+        tagName === 'input' ||
+        tagName === 'textarea' ||
+        tagName === 'select'
+    );
+}
+
 export function formatTime(date: Date) {
     return date.toTimeString().slice(0, 5);
 }

@@ -52,6 +52,11 @@ type TableUIState = {
     // Read once by the panel when it opens, so Space can preview a log
     // without stealing the arrow keys the user is still driving the list with.
     logPanelFocusIntent: LogPanelFocusIntent;
+    // Set when the log body hands focus back to the list (Backspace) without
+    // closing the panel. LogList consumes it and clears it - a one-shot
+    // request rather than durable state, because it describes a moment, not
+    // a condition.
+    pendingListFocusLogId: string | null;
     // Keyed by log id (not the log body viewer's own state) so pins survive
     // closing and reopening the log panel - LogBodyViewer fully unmounts on
     // close, which resets everything local to it. Session-only: intentionally
@@ -86,6 +91,8 @@ type TableUIActions = {
     setFocusedLogId(_logId: string | null): void;
     setLogPanelOpen(_isOpen: boolean): void;
     selectLog(_log: LogEntry, _focusIntent?: LogPanelFocusIntent): void;
+    requestListFocus(_logId: string): void;
+    clearListFocusRequest(): void;
     markLogRead(_log: LogEntry): LogEntry;
     togglePinnedLine(_logId: string, _sourceLineIndex: number): void;
     clearPinnedLines(_logId: string): void;
@@ -135,6 +142,7 @@ export const useTableUIStore = create<TableUIStore>((set, get) => ({
     logReadAtById: {},
     isLogPanelOpen: false,
     logPanelFocusIntent: 'preview',
+    pendingListFocusLogId: null,
     pinnedLinesByLogId: {},
     logBodyViewMode: 'raw',
     collapsedCallTreeNodesByLogId: {},
@@ -266,6 +274,10 @@ export const useTableUIStore = create<TableUIStore>((set, get) => ({
             [logId]: nodeIds
         }
     })),
+    requestListFocus: (logId: string) => set({ pendingListFocusLogId: logId }),
+    clearListFocusRequest: () => set(state => (
+        state.pendingListFocusLogId === null ? state : { pendingListFocusLogId: null }
+    )),
     setAdvancedFilter: (filter: AdvancedLogFilter) => {
         persistAdvancedLogFilter(filter);
         set({ advancedFilter: filter });

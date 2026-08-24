@@ -269,6 +269,8 @@ function LogList({
     const minSizeBytes = useTableUIStore(state => state.minSizeBytes);
     const maxSizeBytes = useTableUIStore(state => state.maxSizeBytes);
     const advancedFilter = useTableUIStore(state => state.advancedFilter);
+    const pendingListFocusLogId = useTableUIStore(state => state.pendingListFocusLogId);
+    const clearListFocusRequest = useTableUIStore(state => state.clearListFocusRequest);
     const isLogPanelOpen = useTableUIStore(state => state.isLogPanelOpen);
 
     // Store actions
@@ -500,6 +502,23 @@ function LogList({
             focusLogAtIndex(selectedLogIndex);
         }
     }, [focusLogAtIndex, isLogPanelOpen, logIndexById]);
+
+    // The log body asked to hand focus back (Backspace). The panel stays
+    // open - this only moves the cursor back to the row it came from, so
+    // scanning can continue with the log still on screen.
+    React.useEffect(() => {
+        if (!pendingListFocusLogId) {
+            return;
+        }
+
+        const index = logIndexById.get(pendingListFocusLogId) ?? -1;
+
+        clearListFocusRequest();
+
+        if (index >= 0) {
+            focusLogAtIndex(index);
+        }
+    }, [clearListFocusRequest, focusLogAtIndex, logIndexById, pendingListFocusLogId]);
 
     // Event handlers
     const handleSort = React.useCallback((event: React.MouseEvent<HTMLDivElement>) => {

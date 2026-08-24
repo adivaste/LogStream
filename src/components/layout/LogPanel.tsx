@@ -75,6 +75,7 @@ function LogPanel() {
         selectedLogId ? state.pinnedLinesByLogId[selectedLogId] ?? EMPTY_PINNED_LINES : EMPTY_PINNED_LINES
     ));
     const logPanelFocusIntent = useTableUIStore(state => state.logPanelFocusIntent);
+    const requestListFocus = useTableUIStore(state => state.requestListFocus);
     const toggleCallTreeNode = useTableUIStore(state => state.toggleCallTreeNode);
     const setCallTreeCollapsedNodes = useTableUIStore(state => state.setCallTreeCollapsedNodes);
     const collapsedCallTreeNodes = useTableUIStore(state => (
@@ -339,6 +340,7 @@ function LogPanel() {
                         fileName={`${selectedLog.id}.log`}
                         logId={selectedLog.id}
                         shouldFocusOnOpen={logPanelFocusIntent === 'body'}
+                        onReturnFocusToList={() => requestListFocus(selectedLog.id)}
                         pinnedLines={pinnedLines}
                         onTogglePinnedLine={(sourceLineIndex) => togglePinnedLine(selectedLog.id, sourceLineIndex)}
                         onClearPinnedLines={() => clearPinnedLines(selectedLog.id)}
