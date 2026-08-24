@@ -20,6 +20,14 @@ export enum SortDirection {
 // call tree derived from it.
 export type LogBodyViewMode = 'raw' | 'tree';
 
+// Where keyboard focus should land when the log panel opens.
+// 'body'    - the user committed to reading this log (Enter), so focus moves
+//             into the log body and they can traverse it immediately.
+// 'preview' - they're still scanning the list (Space, or a mouse click), so
+//             focus must stay where it is or the next arrow key would be
+//             swallowed by the panel.
+export type LogPanelFocusIntent = 'body' | 'preview';
+
 // --- Logs ----
 export type LogEntry = {
     id: string;

@@ -67,6 +67,9 @@ type LogBodyViewerProps = {
     body: string;
     fileName: string;
     logId: string;
+    // True when the panel was opened with Enter, i.e. the user meant to read
+    // this log rather than glance at it.
+    shouldFocusOnOpen: boolean;
     // Source line indexes (0-based, stable across wrap toggling and view
     // filtering - never the virtualizer's own row index, which shifts
     // whenever the debug/executable filter changes which rows exist at all).
@@ -92,6 +95,7 @@ function LogBodyViewer({
     body,
     fileName,
     logId,
+    shouldFocusOnOpen,
     pinnedLines,
     onTogglePinnedLine,
     onClearPinnedLines,
@@ -896,6 +900,25 @@ function LogBodyViewer({
     const rovingSourceLineIndex = isFocusedLineVisible
         ? focusedSourceLineIndex
         : getSourceLineIndex(0);
+
+    // Opened with Enter: land on the first line so the log can be traversed
+    // immediately. Keyed on the log id rather than the flag alone, so moving
+    // to the next log re-runs it, and guarded on `lines` because the body
+    // arrives asynchronously - there is nothing to focus until it does.
+    const hasFocusedOnOpenRef = React.useRef<string | null>(null);
+
+    React.useEffect(() => {
+        if (!shouldFocusOnOpen || lines.length === 0 || visibleLineCount === 0) {
+            return;
+        }
+
+        if (hasFocusedOnOpenRef.current === logId) {
+            return;
+        }
+
+        hasFocusedOnOpenRef.current = logId;
+        focusLineAtVisibleIndex(0);
+    }, [focusLineAtVisibleIndex, lines.length, logId, shouldFocusOnOpen, visibleLineCount]);
 
     return (
         <section ref={sectionRef} className="relative flex min-h-0 flex-1 flex-col border-t border-border">

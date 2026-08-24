@@ -22,6 +22,13 @@ const SORT_SHORTCUTS: ShortcutItem[] = [
     { keys: ['S', 'T'], label: 'Sort by timestamp' }
 ];
 
+const LOG_LIST_SHORTCUTS: ShortcutItem[] = [
+    { keys: ['↑', '↓'], label: 'Move between logs' },
+    { keys: ['Space'], label: 'Preview log, keep focus in list' },
+    { keys: ['Enter'], label: 'Open log and jump into it' },
+    { keys: ['Esc'], label: 'Close the log panel' }
+];
+
 // Only fire while focus is inside the log body panel, so they can use
 // modifier combos the global bare-letter shortcuts above don't claim.
 const LOG_BODY_SHORTCUTS: ShortcutItem[] = [
@@ -103,6 +110,7 @@ export const KeyboardShortcutsPopover = () => {
             <div className="space-y-3 p-3">
                 <ShortcutSection title="Actions" shortcuts={GENERAL_SHORTCUTS} />
                 <ShortcutSection title="Sorting" shortcuts={SORT_SHORTCUTS} />
+                <ShortcutSection title="Log list" shortcuts={LOG_LIST_SHORTCUTS} />
                 <ShortcutSection title="Log body" shortcuts={LOG_BODY_SHORTCUTS} />
             </div>
         </PopoverContent>

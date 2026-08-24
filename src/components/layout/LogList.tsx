@@ -134,6 +134,39 @@ const LogGridHeader = React.memo(function LogGridHeader({
     );
 });
 
+// Status and error state were filterable but invisible: a failed log rendered
+// identically to a successful one, so filtering for errors gave you a list
+// with no way to tell which rows were the errors. Only rendered when there's
+// something worth saying - a clean Success gets no badge, so the marker means
+// "look here" rather than becoming background noise on every row.
+const LogStatusBadge = React.memo(function LogStatusBadge({ log }: { log: LogEntry }) {
+    const isFailed = log.status === 'OperationFailed' || log.hasErrors;
+    const isUnusual = log.status !== 'Success' && log.status !== '';
+
+    if (!isFailed && !isUnusual) {
+        return null;
+    }
+
+    const label = isFailed ? 'Errors' : log.status;
+    const description = log.status && log.status !== 'Success'
+        ? `Status: ${log.status}`
+        : 'This log contains errors';
+
+    return (
+        <span
+            title={description}
+            className={`
+                shrink-0 rounded px-1.5 py-px text-[10px] font-medium leading-4
+                ${isFailed
+            ? 'bg-red-500/15 text-red-700 dark:text-red-400'
+            : 'bg-amber-500/15 text-amber-700 dark:text-amber-400'}
+            `}
+        >
+            {label}
+        </span>
+    );
+});
+
 const LogRow = React.memo(function LogRow({
     log,
     virtualRow,
@@ -176,8 +209,9 @@ const LogRow = React.memo(function LogRow({
                     className="absolute left-3 top-1/2 size-2 -translate-y-1/2 rounded-full bg-emerald-400"
                 />
             )}
-            <div role="gridcell" className="min-w-0 truncate rounded px-2 py-px text-sm text-primary" title={log.operation}>
-                {log.operation}
+            <div role="gridcell" className="flex min-w-0 items-center gap-1.5 rounded px-2 py-px text-sm text-primary">
+                <span className="min-w-0 truncate" title={log.operation}>{log.operation}</span>
+                <LogStatusBadge log={log} />
             </div>
             <div role="gridcell" className="min-w-0 truncate text-sm text-primary" title={log.user}>{log.user}</div>
             <div role="gridcell" className="min-w-0 truncate text-sm text-primary" title={log.app}>{log.app}</div>
@@ -312,7 +346,11 @@ function LogList({
         });
     }, []);
 
-    const focusLogAtIndex = React.useCallback((index: number, shouldUpdateOpenPanel: boolean) => {
+    // Moving the cursor is deliberately *only* moving the cursor. This used to
+    // re-select the focused log whenever the panel happened to be open, which
+    // meant every arrow key fetched another log body - holding an arrow down
+    // queued a fetch per row. Previewing is now an explicit act (Space).
+    const focusLogAtIndex = React.useCallback((index: number) => {
         const log = sortedLogs[index];
 
         if (!log) {
@@ -322,17 +360,11 @@ function LogList({
         setFocusedLogId(log.id);
         pendingFocusLogIdRef.current = log.id;
 
-        if (shouldUpdateOpenPanel && isLogPanelOpen) {
-            selectLog(log);
-        }
-
         rowVirtualizer.scrollToIndex(index, { align: 'auto' });
         focusMountedRow(log.id);
     }, [
         focusMountedRow,
-        isLogPanelOpen,
         rowVirtualizer,
-        selectLog,
         setFocusedLogId,
         sortedLogs
     ]);
@@ -465,7 +497,7 @@ function LogList({
         const selectedLogIndex = logIndexById.get(selectedLogId) ?? -1;
 
         if (selectedLogIndex >= 0) {
-            focusLogAtIndex(selectedLogIndex, false);
+            focusLogAtIndex(selectedLogIndex);
         }
     }, [focusLogAtIndex, isLogPanelOpen, logIndexById]);
 
@@ -483,20 +515,52 @@ function LogList({
         setFocusedLogId(logId);
     }, [setFocusedLogId]);
 
+    // A mouse click is a preview: it opens the panel but leaves focus alone,
+    // because yanking focus out from under a pointer user is disorienting and
+    // there's no keyboard flow to hand off to.
     const handleRowSelect = React.useCallback((log: LogEntry) => {
         setFocusedLogId(log.id);
-        selectLog(log);
+        selectLog(log, 'preview');
         focusMountedRow(log.id);
     }, [focusMountedRow, selectLog, setFocusedLogId]);
+
+    // Space previews without moving focus, so the next arrow key still drives
+    // the list - that's what makes scanning down a list of logs possible.
+    // Pressing it again on the log already showing closes the panel, so the
+    // same key both opens and dismisses the preview.
+    const handleRowPreview = React.useCallback((log: LogEntry) => {
+        const isAlreadyPreviewed = isLogPanelOpen
+            && useTableUIStore.getState().selectedLog?.id === log.id;
+
+        if (isAlreadyPreviewed) {
+            setLogPanelOpen(false);
+            return;
+        }
+
+        setFocusedLogId(log.id);
+        selectLog(log, 'preview');
+    }, [isLogPanelOpen, selectLog, setFocusedLogId, setLogPanelOpen]);
+
+    // Enter commits to reading this log: the panel opens and focus moves into
+    // the body so it can be traversed straight away.
+    const handleRowOpen = React.useCallback((log: LogEntry) => {
+        setFocusedLogId(log.id);
+        selectLog(log, 'body');
+    }, [selectLog, setFocusedLogId]);
 
     const handleRowKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>, index: number) => {
         if (event.key === 'Enter' || event.key === ' ') {
             const log = sortedLogs[index];
 
+            // Space would otherwise scroll the page out from under the list.
             event.preventDefault();
 
             if (log) {
-                handleRowSelect(log);
+                if (event.key === 'Enter') {
+                    handleRowOpen(log);
+                } else {
+                    handleRowPreview(log);
+                }
             }
 
             return;
@@ -519,8 +583,8 @@ function LogList({
         }
 
         event.preventDefault();
-        focusLogAtIndex(nextIndex, true);
-    }, [focusLogAtIndex, handleRowSelect, isLogPanelOpen, setLogPanelOpen, sortedLogs]);
+        focusLogAtIndex(nextIndex);
+    }, [focusLogAtIndex, handleRowOpen, handleRowPreview, isLogPanelOpen, setLogPanelOpen, sortedLogs]);
 
     // Render
     return (

@@ -74,6 +74,7 @@ function LogPanel() {
     const pinnedLines = useTableUIStore(state => (
         selectedLogId ? state.pinnedLinesByLogId[selectedLogId] ?? EMPTY_PINNED_LINES : EMPTY_PINNED_LINES
     ));
+    const logPanelFocusIntent = useTableUIStore(state => state.logPanelFocusIntent);
     const toggleCallTreeNode = useTableUIStore(state => state.toggleCallTreeNode);
     const setCallTreeCollapsedNodes = useTableUIStore(state => state.setCallTreeCollapsedNodes);
     const collapsedCallTreeNodes = useTableUIStore(state => (
@@ -153,15 +154,11 @@ function LogPanel() {
         }
     }, [isLogPanelOpen, setLogPanelOpen]);
 
-    React.useEffect(() => {
-        if (!isLogPanelOpen) {
-            return;
-        }
-
-        // Move focus into the panel when it opens so keyboard/screen-reader
-        // users notice it and Tab doesn't drift behind it.
-        closeButtonRef.current?.focus();
-    }, [isLogPanelOpen, selectedLogId]);
+    // Focus is deliberately NOT taken here. A preview (Space, or a mouse
+    // click) must leave focus in the list, or the arrow key pressed next gets
+    // swallowed by the panel instead of moving the cursor. The 'body' case is
+    // handled inside LogBodyViewer, which has to wait for the body to load
+    // before there is a line to land on.
 
     React.useEffect(() => {
         if (!isLogPanelOpen) {
@@ -341,6 +338,7 @@ function LogPanel() {
                         body={logBody}
                         fileName={`${selectedLog.id}.log`}
                         logId={selectedLog.id}
+                        shouldFocusOnOpen={logPanelFocusIntent === 'body'}
                         pinnedLines={pinnedLines}
                         onTogglePinnedLine={(sourceLineIndex) => togglePinnedLine(selectedLog.id, sourceLineIndex)}
                         onClearPinnedLines={() => clearPinnedLines(selectedLog.id)}

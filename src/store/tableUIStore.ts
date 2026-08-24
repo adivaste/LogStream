@@ -10,6 +10,7 @@ import { useUIStore } from "@/store/uiStore";
 import {
     type LogBodyViewMode,
     type LogEntry,
+    type LogPanelFocusIntent,
     SortBy,
     SortDirection
 } from "../types/ui";
@@ -48,6 +49,9 @@ type TableUIState = {
     selectedLog: LogEntry | null;
     logReadAtById: Record<string, string>;
     isLogPanelOpen: boolean;
+    // Read once by the panel when it opens, so Space can preview a log
+    // without stealing the arrow keys the user is still driving the list with.
+    logPanelFocusIntent: LogPanelFocusIntent;
     // Keyed by log id (not the log body viewer's own state) so pins survive
     // closing and reopening the log panel - LogBodyViewer fully unmounts on
     // close, which resets everything local to it. Session-only: intentionally
@@ -81,7 +85,7 @@ type TableUIActions = {
     isDefaultFilterRange(): boolean;
     setFocusedLogId(_logId: string | null): void;
     setLogPanelOpen(_isOpen: boolean): void;
-    selectLog(_log: LogEntry): void;
+    selectLog(_log: LogEntry, _focusIntent?: LogPanelFocusIntent): void;
     markLogRead(_log: LogEntry): LogEntry;
     togglePinnedLine(_logId: string, _sourceLineIndex: number): void;
     clearPinnedLines(_logId: string): void;
@@ -130,6 +134,7 @@ export const useTableUIStore = create<TableUIStore>((set, get) => ({
     selectedLog: null,
     logReadAtById: {},
     isLogPanelOpen: false,
+    logPanelFocusIntent: 'preview',
     pinnedLinesByLogId: {},
     logBodyViewMode: 'raw',
     collapsedCallTreeNodesByLogId: {},
@@ -199,7 +204,7 @@ export const useTableUIStore = create<TableUIStore>((set, get) => ({
 
         return readLog;
     },
-    selectLog: (log: LogEntry) => {
+    selectLog: (log: LogEntry, focusIntent: LogPanelFocusIntent = 'preview') => {
         const readAt = log.readAt ?? new Date().toISOString();
         const readLog = { ...log, readAt };
 
@@ -215,6 +220,7 @@ export const useTableUIStore = create<TableUIStore>((set, get) => ({
             return {
                 selectedLog: readLog,
                 isLogPanelOpen: true,
+                logPanelFocusIntent: focusIntent,
                 logReadAtById: state.logReadAtById
             };
         });
